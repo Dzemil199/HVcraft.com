@@ -6,8 +6,8 @@ import { PointerLockControls } from 'three/addons/controls/PointerLockControls.j
 // =========================================================================
 const CHUNK_SIZE = 16;       
 const RENDER_DIST = 1;       // STAVI NA 1 (Bilo je 2). Ovo drastično smanjuje broj čankova na početku!
-const WORLD_DEPTH = -20;     // STAVI NA -20 (Bilo je -100). Ne treba ti 100 blokova dubine samo za testiranje!
-const WORLD_HEIGHT = 40;     // Maksimalna visina planina
+const WORLD_DEPTH = -20;
+const WORLD_HEIGHT = 80; // Povećano za visoke planine
 const WATER_LEVEL = 10;      // Nivo vode za reke
 
 // Keširane grupe čankova da ne bismo stalno alocirali memoriju u render petlji
@@ -15,15 +15,11 @@ const activeGroups = [];
 
 // Boje za čestice u zavisnosti od bloka koji kopamo
 const blockColors = {
-    grass: 0x4b7a2a,
-    dirt: 0x5c4033,
-    stone: 0x737373,
-    wood: 0x8b5a2b,
-    glass: 0xffffff,
-    bedrock: 0x151515,
-    leaves: 0x224416,
-    water: 0x1e90ff
+    grass: 0x777777, dirt: 0x555555, stone: 0x888888,
+    wood: 0x666666, glass: 0xaaaaaa, bedrock: 0x333333,
+    leaves: 0x444444, water: 0x999999
 };
+
 
 // =========================================================================
 // BRZI KEŠ (MEMOIZACIJA) - Ovo sprečava "Page Unresponsive" rušenje!
@@ -32,6 +28,8 @@ const heightCache = new Map();
 const riverCache = new Map();
 const treeCheckCache = new Map();
 const treeBlocksCache = new Map();
+const loadedChunks = new Map();
+const modifiedBlocks = new Map();
 
 // =========================================================================
 // 2. INICIJALIZACIJA SCENE I KAMERE
@@ -44,7 +42,6 @@ const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerH
 
 const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(1); // Zaključano na 1 radi stabilnog FPS-a
 document.getElementById('canvas-container').appendChild(renderer.domElement);
 
 // Svetlo
@@ -57,11 +54,7 @@ scene.add(sunLight);
 
 // PointerLock Kontrole
 const controls = new PointerLockControls(camera, document.body);
-const overlay = document.getElementById('overlay');
-
-overlay.addEventListener('click', () => controls.lock());
-controls.addEventListener('lock', () => overlay.style.opacity = '0');
-controls.addEventListener('unlock', () => overlay.style.opacity = '1');
+document.getElementById('overlay').addEventListener('click', () => controls.lock());
 
 // =========================================================================
 // 3. PROCEDURALNE TEKSTURE
@@ -206,9 +199,10 @@ function getRiverValue(x, z) {
 function getBaseHeight(x, z) {
     const nx = x + seedX;
     const nz = z + seedZ;
-    const mountains = Math.sin(nx * 0.015) * Math.cos(nz * 0.015) * 25;
-    const hills = Math.cos(nx * 0.05) * Math.sin(nz * 0.05) * 7;
-    return Math.floor(mountains + hills) + 12; 
+    // Planine veće
+    const mountains = Math.sin(nx * 0.01) * Math.cos(nz * 0.01) * 50; 
+    const hills = Math.cos(nx * 0.05) * Math.sin(nz * 0.05) * 10;
+    return Math.floor(mountains + hills) + 15; 
 }
 
 // Konačna visina terena (gde reke iskopaju tlo) sa kešom
@@ -234,12 +228,10 @@ function getHeight(x, z) {
 
 function isCave(x, y, z) {
     const surfaceHeight = getHeight(x, z);
-    if (y >= surfaceHeight - 4) return false; 
-    if (y <= WORLD_DEPTH + 3) return false;   
-
-    const d = Math.sin(x * 0.12 + y * 0.06) * Math.cos(z * 0.12 + y * 0.06) + 
-              Math.sin(z * 0.15) * Math.cos(x * 0.15) * Math.sin(y * 0.09);
-    return d > 0.86; 
+    if (y >= surfaceHeight - 5) return false; 
+    // 3D Šum za pećine
+    const d = Math.sin(x * 0.1) * Math.cos(z * 0.1) * Math.sin(y * 0.1);
+    return d > 0.4; 
 }
 
 // =========================================================================
@@ -334,8 +326,6 @@ function isTreeBlockAt(bx, by, bz) {
 // =========================================================================
 // 6. SISTEM ČANKOVA & KOPANJE/GRADNJA
 // =========================================================================
-const loadedChunks = new Map();  
-const modifiedBlocks = new Map(); 
 
 function hasBlockAt(bx, by, bz) {
     const key = `${bx},${by},${bz}`;
@@ -463,6 +453,18 @@ function generateChunk(cx, cz) {
 
     scene.add(chunkGroup);
     loadedChunks.set(chunkKey, chunkGroup);
+}
+
+function resetWorld() {
+    // Uklanjanje svih čankova iz scene
+    loadedChunks.forEach((group) => {
+        scene.remove(group);
+        group.traverse(child => { if (child.isInstancedMesh) child.dispose(); });
+    });
+    modifiedBlocks.clear();
+    heightCache.clear();
+    loadedChunks.clear();
+    updateChunks();
 }
 
 function regenerateChunkAt(bx, bz) {
@@ -610,24 +612,27 @@ const jumpStrength = 0.14;
 let canJump = false;
 const playerRadius = 0.3;
 
-document.addEventListener('keydown', e => {
+document.addEventListener('keydown', (e) => {
     if (e.code === 'KeyW') keys.w = true;
     if (e.code === 'KeyA') keys.a = true;
     if (e.code === 'KeyS') keys.s = true;
     if (e.code === 'KeyD') keys.d = true;
     if (e.code === 'ShiftLeft') keys.shift = true;
-
+    
     if (e.code === 'Space' && canJump) {
         vy = jumpStrength;
         canJump = false;
     }
-
-    if (e.code === 'Digit1') changeActiveSlot('grass');
-    if (e.code === 'Digit2') changeActiveSlot('stone');
-    if (e.code === 'Digit3') changeActiveSlot('wood');
-    if (e.code === 'Digit4') changeActiveSlot('glass');
-    if (e.code === 'Digit5') changeActiveSlot('leaves');
-    if (e.code === 'Digit6') changeActiveSlot('water');
+    
+    if (e.code === 'KeyK') {
+        resetWorld(); // Ovo čisti scenu
+        updateChunks(); // Ovo generiše nove čankove samo kada ti želiš
+    }
+    if (e.code.startsWith('Digit')) {
+        const num = parseInt(e.key);
+        if (num >= 1 && num <= 9) changeActiveSlot(num);
+        if (e.code === 'Digit0') changeActiveSlot(10);
+    }
 });
 
 document.addEventListener('keyup', e => {
@@ -639,11 +644,17 @@ document.addEventListener('keyup', e => {
 });
 
 let selectedBlock = 'grass';
-function changeActiveSlot(type) {
-    selectedBlock = type;
-    document.querySelectorAll('.slot').forEach(slot => {
-        slot.classList.toggle('active', slot.dataset.type === type);
+function changeActiveSlot(index) {
+    // Ažuriranje UI-a za 10 slotova
+    const slotIndex = index === 10 ? 9 : index - 1;
+    document.querySelectorAll('.slot').forEach((slot, i) => {
+        const isActive = i === slotIndex;
+        slot.classList.toggle('active', isActive);
+        if (isActive) {
+            selectedBlock = slot.dataset.type;
+        }
     });
+    console.log("Slot izabran: " + index);
 }
 
 function getPlayerBox() {
@@ -771,11 +782,12 @@ document.addEventListener('mousedown', (e) => {
 
             modifiedBlocks.set(blockKey, { action: 'delete' });
 
+            // OPTIMIZACIJA: Ažuriraj samo ako je na ivici čanka
             regenerateChunkAt(rx, rz);
-            regenerateChunkAt(rx+1, rz);
-            regenerateChunkAt(rx-1, rz);
-            regenerateChunkAt(rx, rz+1);
-            regenerateChunkAt(rx, rz-1);
+            if (rx % CHUNK_SIZE === 0) regenerateChunkAt(rx - 1, rz);
+            if (rx % CHUNK_SIZE === CHUNK_SIZE - 1) regenerateChunkAt(rx + 1, rz);
+            if (rz % CHUNK_SIZE === 0) regenerateChunkAt(rx, rz - 1);
+            if (rz % CHUNK_SIZE === CHUNK_SIZE - 1) regenerateChunkAt(rx, rz + 1);
 
         } else if (e.button === 2) { // Desni klik - gradnja
             const normal = intersect.face.normal;
@@ -815,9 +827,7 @@ const tempPos = new THREE.Vector3();
 function animate() {
     requestAnimationFrame(animate);
 
-    const deltaTime = Math.min(clock.getDelta(), 0.1); 
-
-    updateChunks();
+    const deltaTime = Math.min(clock.getDelta(), 0.1);
     blockParticles.update(deltaTime);
 
     if (controls.isLocked) {
@@ -883,4 +893,6 @@ window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
+
+updateChunks();
 animate();

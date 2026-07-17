@@ -1,6 +1,9 @@
 /* Importujemo Minecraft font */
 @import url('https://fonts.cdnfonts.com/css/minecraft-4');
-
+.slot {
+    /* ... ostalo ... */
+    color: transparent; /* Ovo sakriva tekst "Trava", "Kamen" itd. */
+}
 #game-ui {
     position: absolute;
     top: 0;
