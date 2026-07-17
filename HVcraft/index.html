@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Minecraft - HVCraft Ultra Edition</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+            user-select: none;
+            background-color: #87ceeb;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Nišan na sredini ekrana */
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 12px;
+            height: 12px;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            z-index: 5;
+        }
+        #crosshair::before, #crosshair::after {
+            content: '';
+            position: absolute;
+            background: rgba(255, 255, 255, 0.85);
+            box-shadow: 0 0 2px rgba(0,0,0,0.6);
+        }
+        #crosshair::before {
+            top: 0; left: 5px; width: 2px; height: 12px;
+        }
+        #crosshair::after {
+            top: 5px; left: 0; width: 12px; height: 2px;
+        }
+
+        /* Početni ekran */
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(10, 15, 25, 0.85);
+            color: white;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            cursor: pointer;
+            z-index: 10;
+            transition: opacity 0.3s ease;
+        }
+
+        #overlay h1 {
+            font-size: 3.5rem;
+            margin-bottom: 15px;
+            letter-spacing: 2px;
+            text-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            color: #4caf50;
+        }
+
+        #overlay p {
+            font-size: 1.1rem;
+            margin: 6px 0;
+            color: #ddd;
+        }
+
+        .highlight-text {
+            color: #ffeb3b;
+            font-weight: bold;
+        }
+
+        /* Hotbar (Inventar sa blokovima) */
+        #hotbar {
+            position: absolute;
+            bottom: 25px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 12px;
+            background: rgba(15, 15, 20, 0.8);
+            padding: 12px;
+            border-radius: 12px;
+            border: 2px solid #444;
+            pointer-events: none;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+        }
+
+        .slot {
+            width: 55px;
+            height: 55px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 10px;
+            font-weight: bold;
+            border: 3px solid #333;
+            border-radius: 8px;
+            text-shadow: 1px 1px 2px black;
+            transition: all 0.15s ease;
+        }
+
+        .slot.active {
+            border-color: #4caf50;
+            box-shadow: 0 0 15px rgba(76, 175, 80, 0.8);
+            transform: scale(1.1);
+        }
+    </style>
+
+    <!-- Uvozimo Three.js preko Import mapa radi lakšeg rada sa modulima -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.147.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.147.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <div id="overlay">
+        <h1>HVCRAFT ULTRA</h1>
+        <p class="highlight-text">KLIKNI BILO GDE ZA POČETAK</p>
+        <br>
+        <p>Kretanje: <strong>W, A, S, D</strong> | Skok: <strong>Space</strong></p>
+        <p>Brzo trčanje: <strong>Drži LEVI SHIFT</strong></p>
+        <p>Auto-Jump: <strong>Aktiviran!</strong> (Automatski se penješ uz blok)</p>
+        <p>Kopanje: <strong>Levi klik</strong> | Postavljanje: <strong>Desni klik</strong></p>
+        <p>Izbor bloka: <strong>Tasteri 1, 2, 3, 4</strong></p>
+        <p style="color:#81c784; margin-top: 15px;">Razdvojen kod & Optimizovane čestice bez laga!</p>
+    </div>
+
+    <div id="crosshair"></div>
+
+    <div id="hotbar">
+        <div class="slot active" data-type="grass" style="background: #4b7a2a;">Trava (1)</div>
+        <div class="slot" data-type="stone" style="background: #737373;">Kamen (2)</div>
+        <div class="slot" data-type="wood" style="background: #8b5a2b;">Drvo (3)</div>
+        <div class="slot" data-type="glass" style="background: rgba(173, 216, 230, 0.5); border-style: dashed;">Staklo (4)</div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <!-- Povezujemo tvoj Java.js kao ES modul -->
+    <script type="module" src="Java.js"></script>
+    <div id="game-ui">
+    <!-- EKRAN 1: GLAVNI MENI -->
+    <div id="screen-main" class="mc-screen active">
+        <div class="logo-container">
+            <h1 class="mc-logo">MINCERAFT</h1>
+            <span class="splash-text">Where there is not light, there can spider!</span>
+        </div>
+        
+        <div class="menu-buttons">
+            <button class="mc-btn" onclick="switchScreen('screen-select-world')">Singleplayer</button>
+            <button class="mc-btn disabled">Multiplayer</button>
+            <button class="mc-btn">Download Offline</button>
+            
+            <div class="btn-row">
+                <button class="mc-btn icon-btn">🌐</button>
+                <button class="mc-btn half-btn">Options...</button>
+                <button class="mc-btn half-btn">Edit Profile</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- EKRAN 2: SELECT WORLD -->
+    <div id="screen-select-world" class="mc-screen dirt-bg">
+        <h2 class="screen-title">Select World</h2>
+        
+        <!-- Lista svetova (prazna crna kutija iz Screenshot-a) -->
+        <div class="world-list"></div>
+        
+        <div class="bottom-controls">
+            <div class="btn-row">
+                <button class="mc-btn disabled">Play Selected World</button>
+                <button class="mc-btn" onclick="switchScreen('screen-create-world')">Create New World</button>
+            </div>
+            <div class="btn-row">
+                <button class="mc-btn auto-btn disabled">Rename</button>
+                <button class="mc-btn auto-btn disabled">Delete</button>
+                <button class="mc-btn auto-btn disabled">Backup</button>
+                <button class="mc-btn auto-btn" onclick="switchScreen('screen-main')">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- EKRAN 3: CREATE NEW WORLD -->
+    <div id="screen-create-world" class="mc-screen dirt-bg">
+        <h2 class="screen-title">Create New World</h2>
+        
+        <div class="input-section">
+            <label>World Name</label>
+            <input type="text" class="mc-input" value="New World_">
+            <p class="sub-text">Will be saved in: New World</p>
+        </div>
+
+        <div class="options-section">
+            <button class="mc-btn">Game Mode: Survival</button>
+            <p class="desc-text">Search for resources, crafting, gain<br>levels, health and hunger</p>
+            
+            <button class="mc-btn mt-20">More World Options...</button>
+        </div>
+
+        <div class="bottom-controls">
+            <div class="btn-row">
+                <button class="mc-btn" onclick="startGame()">Create New World</button>
+                <button class="mc-btn" onclick="switchScreen('screen-select-world')">Cancel</button>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

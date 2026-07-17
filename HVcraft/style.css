@@ -1,0 +1,194 @@
+/* Importujemo Minecraft font */
+@import url('https://fonts.cdnfonts.com/css/minecraft-4');
+
+#game-ui {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: 100;
+    font-family: 'Minecraft', sans-serif;
+    user-select: none;
+}
+
+.mc-screen {
+    display: none;
+    width: 100%;
+    height: 100%;
+    flex-direction: column;
+    align-items: center;
+    color: #ffffff;
+}
+
+.mc-screen.active {
+    display: flex;
+}
+
+/* Zamućena pozadina za glavni meni */
+#screen-main {
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(8px);
+}
+
+/* Tekstura zemlje za podmenije */
+.dirt-bg {
+    /* Ugrađena mala tekstura mračne zemlje koja se ponavlja */
+    background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAAAM5bEAAAAAVklEQVR42mOwsrJiQAJ2dnbkKDY2NrhIWFgYXYSBgeE/LgXIhpOkmwBVkIqL8Skgz2BsbIwkhoUFWSW1DSBLo4sQZQGyZtIkY1XExoKsktogWRAjFwMAMlM0uS6XnFkAAAAASUVORK5CYII=');
+    background-repeat: repeat;
+    background-size: 64px 64px;
+    background-color: #2b2b2b;
+    background-blend-mode: multiply;
+}
+
+/* LOGO I SPLASH TEKST */
+.logo-container {
+    margin-top: 50px;
+    position: relative;
+    text-align: center;
+}
+
+.mc-logo {
+    font-size: 80px;
+    color: #dfdfdf;
+    text-shadow: 4px 4px 0px #333, -4px -4px 0px #000;
+    margin: 0;
+    letter-spacing: 2px;
+}
+
+.splash-text {
+    position: absolute;
+    right: -40px;
+    bottom: -10px;
+    color: #ffff00;
+    font-size: 18px;
+    transform: rotate(-20deg);
+    text-shadow: 2px 2px 0px #3f3f00;
+    animation: pulse 0.5s alternate infinite;
+}
+
+@keyframes pulse {
+    from { transform: rotate(-20deg) scale(1); }
+    to { transform: rotate(-20deg) scale(1.05); }
+}
+
+/* DUGMIĆI */
+.menu-buttons {
+    margin-top: 60px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 400px;
+}
+
+.mc-btn {
+    width: 100%;
+    height: 40px;
+    background-color: #7a7a7a;
+    border: 2px solid;
+    border-top-color: #a8a8a8;
+    border-left-color: #a8a8a8;
+    border-bottom-color: #585858;
+    border-right-color: #585858;
+    color: #ffffff;
+    font-family: 'Minecraft', sans-serif;
+    font-size: 16px;
+    text-shadow: 2px 2px 0px #3f3f3f;
+    cursor: pointer;
+    box-sizing: border-box;
+}
+
+.mc-btn:hover:not(.disabled) {
+    border-color: #ffffff;
+    background-color: #8c8c8c;
+    color: #ffffa0; /* Zuti tekst na hover kao u Minecraftu */
+}
+
+.mc-btn.disabled {
+    color: #a0a0a0;
+    text-shadow: 2px 2px 0px #2a2a2a;
+    cursor: not-allowed;
+}
+
+.btn-row {
+    display: flex;
+    gap: 10px;
+    width: 100%;
+    justify-content: center;
+}
+
+.half-btn { width: 50%; }
+.auto-btn { width: auto; padding: 0 15px; }
+.icon-btn { width: 40px; font-size: 20px; }
+
+/* OSTALI EKRANI */
+.screen-title {
+    margin-top: 20px;
+    font-size: 24px;
+    font-weight: normal;
+    text-shadow: 2px 2px 0px #000;
+}
+
+.world-list {
+    width: 600px;
+    height: 350px;
+    background-color: rgba(0, 0, 0, 0.7);
+    border: 2px solid #000;
+    margin-top: 20px;
+    box-shadow: inset 0 0 10px #000;
+}
+
+.bottom-controls {
+    position: absolute;
+    bottom: 30px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 600px;
+}
+
+.input-section, .options-section {
+    width: 400px;
+    margin-top: 20px;
+    text-align: left;
+}
+
+.input-section label {
+    display: block;
+    color: #a0a0a0;
+    margin-bottom: 5px;
+    text-shadow: 2px 2px 0px #000;
+}
+
+.mc-input {
+    width: 100%;
+    height: 40px;
+    background-color: #000;
+    border: 2px solid #a0a0a0;
+    color: #fff;
+    font-family: 'Minecraft', sans-serif;
+    font-size: 18px;
+    padding: 0 10px;
+    box-sizing: border-box;
+}
+
+.mc-input:focus {
+    outline: 2px solid #fff;
+}
+
+.sub-text {
+    color: #a0a0a0;
+    font-size: 14px;
+    margin-top: 5px;
+    text-shadow: 2px 2px 0px #000;
+}
+
+.desc-text {
+    color: #a0a0a0;
+    font-size: 14px;
+    margin-top: 10px;
+    text-shadow: 2px 2px 0px #000;
+    text-align: center;
+}
+
+.mt-20 { margin-top: 20px; }
