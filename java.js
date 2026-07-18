@@ -817,6 +817,139 @@ const highlightBox = new THREE.Mesh(
 scene.add(highlightBox);
 
 // =========================================================================
+// 11. MOBILNE KONTROLE I DETEKCIJA DODIRA
+// =========================================================================
+
+// Detekcija da li korisnik koristi mobilni telefon
+const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+if (isMobile) {
+    // Prikaži mobilne komande
+    document.getElementById('mobile-controls').style.display = 'flex';
+    
+    // Zaobilazimo PointerLock na mobilnom i ručno aktiviramo igru
+    const overlay = document.getElementById('overlay');
+    overlay.replaceWith(overlay.cloneNode(true)); // Uklanja stari click listener
+    document.getElementById('overlay').addEventListener('click', (e) => {
+        document.getElementById('overlay').style.display = 'none';
+        controls.isLocked = true; // Varamo engine da pomisli da je miš zaključan kako bi radilo kretanje
+    });
+
+    // 1. Gledanje okolo (Touch Look) pomoću prevlačenja prsta
+    let touchStartX = 0, touchStartY = 0;
+    let euler = new THREE.Euler(0, 0, 0, 'YXZ');
+    
+    document.addEventListener('touchstart', (e) => {
+        if (e.target.classList.contains('mob-btn') || e.target.classList.contains('slot')) return;
+        touchStartX = e.touches[0].pageX;
+        touchStartY = e.touches[0].pageY;
+    }, { passive: false });
+
+    document.addEventListener('touchmove', (e) => {
+        if (e.target.classList.contains('mob-btn') || e.target.classList.contains('slot')) return;
+        e.preventDefault(); // Sprečavamo skrolovanje browsera
+        
+        const dx = e.touches[0].pageX - touchStartX;
+        const dy = e.touches[0].pageY - touchStartY;
+        
+        euler.setFromQuaternion(camera.quaternion);
+        euler.y -= dx * 0.005; // Osetljivost levo-desno
+        euler.x -= dy * 0.005; // Osetljivost gore-dole
+        euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, euler.x)); // Ograničavanje okretanja preko glave
+        
+        camera.quaternion.setFromEuler(euler);
+        
+        touchStartX = e.touches[0].pageX;
+        touchStartY = e.touches[0].pageY;
+    }, { passive: false });
+
+    // 2. Mapiranje tastera za kretanje na tvoj postojeći "keys" objekat
+    const bindBtn = (id, keyName) => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        btn.addEventListener('touchstart', (e) => { e.preventDefault(); keys[keyName] = true; });
+        btn.addEventListener('touchend', (e) => { e.preventDefault(); keys[keyName] = false; });
+    };
+
+    bindBtn('btn-w', 'w');
+    bindBtn('btn-a', 'a');
+    bindBtn('btn-s', 's');
+    bindBtn('btn-d', 'd');
+
+    // 3. Skok
+    document.getElementById('btn-jump').addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        if (canJump) { 
+            vy = jumpStrength; 
+            canJump = false; 
+        }
+    });
+
+    // 4. Interakcija (Kopanje i Građenje prilagođeno telefonu)
+    function mobInteract(action) {
+        raycaster.setFromCamera(mouse, camera);
+        const intersects = raycaster.intersectObjects(activeGroups, true);
+        
+        if (intersects.length > 0 && intersects[0].distance < 6) {
+            const intersect = intersects[0];
+            const instMesh = intersect.object;
+            const instanceId = intersect.instanceId;
+
+            const matrix = new THREE.Matrix4();
+            instMesh.getMatrixAt(instanceId, matrix);
+            const pos = new THREE.Vector3();
+            pos.setFromMatrixPosition(matrix);
+
+            const rx = Math.round(pos.x);
+            const ry = Math.round(pos.y);
+            const rz = Math.round(pos.z);
+            const blockKey = `${rx},${ry},${rz}`;
+
+            if (action === 'mine') {
+                if (instMesh.userData.type === 'bedrock') return;
+
+                const particleColor = blockColors[instMesh.userData.type] || 0x737373;
+                blockParticles.spawn(pos, particleColor, 12);
+                modifiedBlocks.set(blockKey, { action: 'delete' });
+
+                regenerateChunkAt(rx, rz);
+                if (rx % CHUNK_SIZE === 0) regenerateChunkAt(rx - 1, rz);
+                if (rx % CHUNK_SIZE === CHUNK_SIZE - 1) regenerateChunkAt(rx + 1, rz);
+                if (rz % CHUNK_SIZE === 0) regenerateChunkAt(rx, rz - 1);
+                if (rz % CHUNK_SIZE === CHUNK_SIZE - 1) regenerateChunkAt(rx, rz + 1);
+
+            } else if (action === 'place') {
+                const normal = intersect.face.normal;
+                const bx = rx + normal.x;
+                const by = ry + normal.y;
+                const bz = rz + normal.z;
+
+                const playerFeetY = camera.position.y - 1.6;
+                const overlapX = Math.abs(bx - camera.position.x) < 0.6;
+                const overlapZ = Math.abs(bz - camera.position.z) < 0.6;
+                const overlapY = (by + 0.5 > playerFeetY) && (by - 0.5 < camera.position.y);
+
+                if (!(overlapX && overlapY && overlapZ)) {
+                    modifiedBlocks.set(`${bx},${by},${bz}`, { action: 'create', type: selectedBlock });
+                    regenerateChunkAt(bx, bz);
+                }
+            }
+        }
+    }
+
+    document.getElementById('btn-mine').addEventListener('touchstart', (e) => { e.preventDefault(); mobInteract('mine'); });
+    document.getElementById('btn-place').addEventListener('touchstart', (e) => { e.preventDefault(); mobInteract('place'); });
+
+    // 5. Biranje blokova pritiskom na hotbar na dnu ekrana
+    document.querySelectorAll('.slot').forEach((slot, index) => {
+        slot.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            changeActiveSlot(index === 9 ? 10 : index + 1);
+        });
+    });
+}
+
+// =========================================================================
 // 10. GAME LOOP (Animacija i fizika)
 // =========================================================================
 const clock = new THREE.Clock();
