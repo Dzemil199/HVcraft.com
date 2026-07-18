@@ -10,7 +10,7 @@
             margin: 0; padding: 0; overflow: hidden;
             width: 100%; height: 100%;
             user-select: none; background-color: #87ceeb;
-            font-family: sans-serif;
+            font-family: 'Courier New', Courier, monospace; /* Imitacija piksel fonta */
         }
 
         #canvas-container { width: 100%; height: 100%; }
@@ -29,17 +29,57 @@
         #crosshair::before { top: 0; left: 5px; width: 2px; height: 12px; }
         #crosshair::after { top: 5px; left: 0; width: 12px; height: 2px; }
 
-        /* Overlay za početak igre */
+        /* Stilovi za Minecraft Meni */
         #overlay {
             position: absolute; top: 0; left: 0;
             width: 100%; height: 100%;
-            background: rgba(10, 15, 25, 0.85);
+            background: #3a3a3a url('https://www.transparenttextures.com/patterns/cubes.png') repeat; /* Podloga slična dirt bloku */
             color: white; display: flex;
             flex-direction: column; justify-content: center;
             align-items: center; text-align: center;
-            cursor: pointer; z-index: 10;
+            z-index: 10;
         }
-        #overlay h1 { color: #4caf50; font-size: 3rem; }
+
+        .menu-screen {
+            display: none; 
+            flex-direction: column; 
+            align-items: center; 
+            width: 100%;
+        }
+
+        .menu-screen.active {
+            display: flex;
+        }
+
+        .mc-btn {
+            width: 400px; height: 40px; margin: 5px;
+            background-color: #7a7a7a; border: 2px solid;
+            border-top-color: #a8a8a8; border-left-color: #a8a8a8;
+            border-bottom-color: #585858; border-right-color: #585858;
+            color: #ffffff; font-family: inherit; font-weight: bold;
+            font-size: 16px; text-shadow: 2px 2px 0px #3f3f3f;
+            cursor: pointer;
+        }
+
+        .mc-btn:hover { background-color: #8c8c8c; color: #ffffa0; }
+        .mc-btn.half { width: 195px; }
+        .mc-btn.third { width: 125px; }
+        .row { display: flex; justify-content: space-between; width: 400px; }
+
+        .world-list {
+            width: 400px; height: 200px; background: rgba(0,0,0,0.6); 
+            border: 2px solid #222; margin-bottom: 15px; overflow-y: auto; text-align: left;
+        }
+        .world-item {
+            padding: 10px; border-bottom: 2px solid #333; cursor: pointer; color: #fff; text-shadow: 1px 1px #000;
+        }
+        .world-item:hover { background: rgba(255,255,255,0.1); }
+        .world-item span { color: #888; font-size: 12px; }
+
+        .mc-input {
+            width: 100%; height: 30px; background: black; color: white; 
+            border: 2px solid #a8a8a8; margin-bottom: 20px; font-size: 16px; font-family: inherit; padding: 5px; box-sizing: border-box;
+        }
 
         /* Hotbar */
         #hotbar {
@@ -67,9 +107,79 @@
 </head>
 <body>
 
-    <div id="overlay" onclick="this.style.display='none'">
-        <h1>HVCRAFT ULTRA</h1>
-        <p>KLIKNI BILO GDE DA UĐEŠ U IGRU</p>
+    <div id="mobile-controls">
+    <!-- Kontrole za kretanje -->
+    <div class="d-pad">
+        <div class="mob-btn" id="btn-w">W</div>
+        <div class="d-pad-row">
+            <div class="mob-btn" id="btn-a">A</div>
+            <div class="mob-btn" id="btn-s">S</div>
+            <div class="mob-btn" id="btn-d">D</div>
+        </div>
+    </div>
+    <!-- Kontrole za akciju -->
+    <div class="action-pad">
+        <div class="mob-btn" id="btn-jump">Skok</div>
+        <div class="d-pad-row">
+            <div class="mob-btn" id="btn-mine">Kopaj</div>
+            <div class="mob-btn" id="btn-place">Stavi</div>
+        </div>
+    </div>
+</div>
+
+    <div id="overlay">
+        <!-- 1. Glavni Meni -->
+        <div id="screen-main" class="menu-screen active">
+            <h1 style="font-size: 4rem; text-shadow: 4px 4px #000; margin-bottom: 40px; color: #ddd;">MINCERAFT</h1>
+            <button class="mc-btn" id="btn-singleplayer">Singleplayer</button>
+            <button class="mc-btn" id="btn-multiplayer">Multiplayer</button>
+            <button class="mc-btn" id="btn-download">Download Offline</button>
+            <br>
+            <div class="row">
+                <button class="mc-btn half" id="btn-options">Options...</button>
+                <button class="mc-btn half" id="btn-profile">Edit Profile</button>
+            </div>
+        </div>
+
+        <!-- 2. Select World -->
+        <div id="screen-select" class="menu-screen">
+            <h2 style="text-shadow: 2px 2px #000;">Select World</h2>
+            <div class="world-list">
+                <div class="world-item">New World<br><span>Survival Mode, Cheats, Version: 1.0</span></div>
+            </div>
+            <div class="row">
+                <button class="mc-btn half" id="btn-play-world">Play Selected World</button>
+                <button class="mc-btn half" id="btn-go-create">Create New World</button>
+            </div>
+            <div class="row">
+                <button class="mc-btn third">Rename</button>
+                <button class="mc-btn third">Delete</button>
+                <button class="mc-btn third" id="btn-cancel-select">Cancel</button>
+            </div>
+        </div>
+
+        <!-- 3. Create World -->
+        <div id="screen-create" class="menu-screen">
+            <h2 style="text-shadow: 2px 2px #000;">Create New World</h2>
+            <div style="text-align: left; width: 400px;">
+                <label style="text-shadow: 1px 1px #000;">World Name</label><br>
+                <input type="text" class="mc-input" value="New World_">
+            </div>
+            <button class="mc-btn">Game Mode: Survival</button>
+            <p style="color: #aaa; font-size: 14px; text-shadow: 1px 1px #000; margin-bottom: 20px;">Search for resources, crafting, gain<br>levels, health and hunger</p>
+            <button class="mc-btn" style="margin-bottom: 20px;">More World Options...</button>
+            <div class="row">
+                <button class="mc-btn half" id="btn-create-world">Create New World</button>
+                <button class="mc-btn half" id="btn-cancel-create">Cancel</button>
+            </div>
+        </div>
+
+        <!-- 4. Izbor uređaja (zadržano za tvoje kontrole) -->
+        <div id="screen-device" class="menu-screen">
+            <h2 style="text-shadow: 2px 2px #000;">Izaberi način igranja</h2>
+            <button class="mc-btn" id="start-desktop">PC / Laptop</button>
+            <button class="mc-btn" id="start-mobile">Telefon / Tablet</button>
+        </div>
     </div>
 
     <div id="crosshair"></div>

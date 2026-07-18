@@ -14,7 +14,66 @@
     font-family: 'Minecraft', sans-serif;
     user-select: none;
 }
+/* Mobilne kontrole - sakrivene na desktopu */
+#mobile-controls {
+    display: none; 
+    position: absolute; 
+    bottom: 90px; 
+    width: 100%;
+    justify-content: space-between; 
+    padding: 0 20px; 
+    box-sizing: border-box;
+    z-index: 10; 
+    pointer-events: none;
+}
 
+.d-pad, .action-pad { 
+    display: flex; 
+    flex-direction: column; 
+    align-items: center; 
+    pointer-events: auto; 
+    gap: 5px; 
+}
+
+.d-pad-row { 
+    display: flex; 
+    gap: 5px; 
+}
+
+.mob-btn { 
+    width: 50px; 
+    height: 50px; 
+    border-radius: 50%; 
+    background: rgba(255, 255, 255, 0.4); 
+    border: 2px solid white; 
+    color: white; 
+    font-weight: bold; 
+    display: flex; 
+    justify-content: center; 
+    align-items: center; 
+    user-select: none; 
+    touch-action: none;
+}
+
+.mob-btn:active { 
+    background: rgba(255, 255, 255, 0.8); 
+    color: black; 
+}
+
+/* Aktiviraj kliktanje hotbara na mobilnom i prilagodi ga */
+@media (max-width: 768px) {
+    #hotbar { 
+        pointer-events: auto; 
+        flex-wrap: wrap; 
+        justify-content: center; 
+        width: 90%; 
+        bottom: 10px; 
+    }
+    .slot { 
+        width: 40px; 
+        height: 40px; 
+    }
+}
 .mc-screen {
     display: none;
     width: 100%;

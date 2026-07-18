@@ -4,8 +4,11 @@ import { PointerLockControls } from 'three/addons/controls/PointerLockControls.j
 // =========================================================================
 // 1. GLOBALNA PODEŠAVANJA SVETA
 // =========================================================================
-const CHUNK_SIZE = 16;       
-const RENDER_DIST = 1;       // STAVI NA 1 (Bilo je 2). Ovo drastično smanjuje broj čankova na početku!
+const CHUNK_SIZE = 16;
+const RENDER_DIST_FRONT = 4; // Koliko čankova se vidi ispred
+const RENDER_DIST_SIDE = 2;  // Koliko čankova se vidi sa strane
+const RENDER_DIST_BACK = 1;  // Koliko čankova se vidi iza
+const MAX_RENDER_DIST = Math.max(RENDER_DIST_FRONT, RENDER_DIST_SIDE, RENDER_DIST_BACK);
 const WORLD_DEPTH = -20;
 const WORLD_HEIGHT = 80; // Povećano za visoke planine
 const WATER_LEVEL = 10;      // Nivo vode za reke
@@ -30,6 +33,17 @@ const treeCheckCache = new Map();
 const treeBlocksCache = new Map();
 const loadedChunks = new Map();
 const modifiedBlocks = new Map();
+const chunkLoadQueue = [];
+let isGeneratingChunk = false;
+
+const mineSound = new Audio('sounds/mine.mp3');
+const placeSound = new Audio('sounds/place.mp3');
+
+// Pomoćna funkcija da zvuk može da se "reprodukuje" više puta brzo jedan za drugim
+function playSound(audio) {
+    audio.currentTime = 0; // Vraća zvuk na početak ako se još uvek čuje
+    audio.play().catch(e => console.log("Browser blokirao zvuk (klikni prvo na igru)"));
+}
 
 // =========================================================================
 // 2. INICIJALIZACIJA SCENE I KAMERE
@@ -45,7 +59,7 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 document.getElementById('canvas-container').appendChild(renderer.domElement);
 
 // Svetlo
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
+const ambientLight = new THREE.AmbientLight(0xcccccc, 0.5);
 scene.add(ambientLight);
 
 const sunLight = new THREE.DirectionalLight(0xffffff, 0.35);
@@ -54,7 +68,6 @@ scene.add(sunLight);
 
 // PointerLock Kontrole
 const controls = new PointerLockControls(camera, document.body);
-document.getElementById('overlay').addEventListener('click', () => controls.lock());
 
 // =========================================================================
 // 3. PROCEDURALNE TEKSTURE
@@ -333,12 +346,18 @@ function hasBlockAt(bx, by, bz) {
         return modifiedBlocks.get(key).action === 'create';
     }
     if (by < WORLD_DEPTH || by > WORLD_HEIGHT) return false;
-    if (by <= WORLD_DEPTH + 2) return true; 
-
-    if (isTreeBlockAt(bx, by, bz)) return true;
 
     const surfaceHeight = getHeight(bx, bz);
-    if (by > surfaceHeight) return false; 
+
+    // OPTIMIZACIJA: Drveće raste samo iznad zemlje! 
+    // Preskakanje ovoga za podzemlje drastično ubrzava igru!
+    if (by > surfaceHeight) {
+        return isTreeBlockAt(bx, by, bz);
+    }
+
+    if (by <= WORLD_DEPTH + 2) return true; 
+
+    // Ako smo pod zemljom, ostaje samo provera za pećine
     if (isCave(bx, by, bz)) return false; 
 
     return true;
@@ -350,14 +369,22 @@ function isBlockExposed(x, y, z) {
            !hasBlockAt(x, y, z+1) || !hasBlockAt(x, y, z-1);
 }
 
-function generateChunk(cx, cz) {
+// Dodaj parametar isImmediate = false (po defaultu je sporo za istraživanje)
+async function generateChunk(cx, cz, isImmediate = false) {
     const chunkKey = `${cx},${cz}`;
     const startX = cx * CHUNK_SIZE;
     const startZ = cz * CHUNK_SIZE;
 
+    const chunkGroup = new THREE.Group();
+    loadedChunks.set(chunkKey, chunkGroup);
+    scene.add(chunkGroup);
     const blocksByType = { grass: [], dirt: [], stone: [], wood: [], leaves: [], water: [], glass: [], bedrock: [] };
-
     for (let x = startX; x < startX + CHUNK_SIZE; x++) {
+        // PAUZA SE DEŠAVA SAMO AKO NIJE "INSTANT" MOD
+        if (!isImmediate && x % 4 === 0) {
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
+
         for (let z = startZ; z < startZ + CHUNK_SIZE; z++) {
             const surfaceHeight = getHeight(x, z);
 
@@ -430,7 +457,6 @@ function generateChunk(cx, cz) {
         }
     }
 
-    const chunkGroup = new THREE.Group();
     const dummy = new THREE.Object3D();
 
     for (const [type, list] of Object.entries(blocksByType)) {
@@ -451,8 +477,10 @@ function generateChunk(cx, cz) {
         chunkGroup.add(instMesh);
     }
 
-    scene.add(chunkGroup);
-    loadedChunks.set(chunkKey, chunkGroup);
+    // Provera za svaki slučaj - brišemo iz memorije ako je igrač pobegao daleko dok se ovo generisalo
+    if (!loadedChunks.has(chunkKey)) {
+        chunkGroup.traverse(child => { if (child.isInstancedMesh) child.dispose(); });
+    }
 }
 
 function resetWorld() {
@@ -467,46 +495,99 @@ function resetWorld() {
     updateChunks();
 }
 
-function regenerateChunkAt(bx, bz) {
-    const cx = Math.floor(bx / CHUNK_SIZE);
-    const cz = Math.floor(bz / CHUNK_SIZE);
-    const chunkKey = `${cx},${cz}`;
+/**
+ * Pronalazi čank na datoj poziciji, uklanja ga iz scene i memorije, 
+ * i dodaje ga u red za ponovno, asinhrono generisanje.
+ * Proverava i susedne čankove ako je izmena na ivici.
+ */
+function refreshChunksAround(blockX, blockZ) {
+    const chunksToRefresh = new Set();
+    const mainChunkX = Math.floor(blockX / CHUNK_SIZE);
+    const mainChunkZ = Math.floor(blockZ / CHUNK_SIZE);
+    chunksToRefresh.add(`${mainChunkX},${mainChunkZ}`);
 
-    const oldGroup = loadedChunks.get(chunkKey);
-    if (oldGroup) {
-        scene.remove(oldGroup);
-        oldGroup.traverse(child => {
-            if (child.isInstancedMesh) child.dispose();
-        });
-        oldGroup.clear();
-        loadedChunks.delete(chunkKey);
-    }
-    generateChunk(cx, cz);
+    // Provera da li je blok na ivici čanka
+    const modX = (blockX % CHUNK_SIZE + CHUNK_SIZE) % CHUNK_SIZE;
+    const modZ = (blockZ % CHUNK_SIZE + CHUNK_SIZE) % CHUNK_SIZE;
+
+    if (modX === 0) chunksToRefresh.add(`${mainChunkX - 1},${mainChunkZ}`);
+    if (modX === CHUNK_SIZE - 1) chunksToRefresh.add(`${mainChunkX + 1},${mainChunkZ}`);
+    if (modZ === 0) chunksToRefresh.add(`${mainChunkX},${mainChunkZ - 1}`);
+    if (modZ === CHUNK_SIZE - 1) chunksToRefresh.add(`${mainChunkX},${mainChunkZ + 1}`);
+
+    chunksToRefresh.forEach(async key => { // dodaj async ovde
+        const [cx, cz] = key.split(',').map(Number);
+        
+        // Ukloni staro
+        if (loadedChunks.has(key)) {
+            const group = loadedChunks.get(key);
+            scene.remove(group);
+            group.traverse(child => { if (child.isInstancedMesh) child.dispose(); });
+            loadedChunks.delete(key);
+        }
+        
+        // GENERIŠI ODMAH (isImmediate = true)
+        await generateChunk(cx, cz, true);
+        updateActiveGroups(); // osveži raycaster odmah nakon generisanja
+    });
 }
 
-let currentChunkX = NaN, currentChunkZ = NaN;
+let currentChunkX = NaN, currentChunkZ = NaN, currentChunkAngle = NaN;
+const playerDirection = new THREE.Vector3();
+
 function updateChunks() {
     const pChunkX = Math.floor(camera.position.x / CHUNK_SIZE);
     const pChunkZ = Math.floor(camera.position.z / CHUNK_SIZE);
 
-    if (pChunkX === currentChunkX && pChunkZ === currentChunkZ) return;
+    controls.getDirection(playerDirection);
+    const pAngle = Math.atan2(playerDirection.x, playerDirection.z);
+    // Kvantizujemo ugao u 8 pravaca (svaki po 45 stepeni) da se ne bi ažuriralo na svaki mali pokret miša
+    const pAngleDiscrete = Math.floor(pAngle / (Math.PI / 4));
+
+    // Ažuriraj samo ako se igrač pomerio u novi čank ILI se okrenuo u novi pravac
+    if (pChunkX === currentChunkX && pChunkZ === currentChunkZ && pAngleDiscrete === currentChunkAngle) return;
 
     currentChunkX = pChunkX;
     currentChunkZ = pChunkZ;
+    currentChunkAngle = pAngleDiscrete;
+
+    // Normalizujemo vektor pravca gledanja na XZ ravni
+    const dirX = playerDirection.x;
+    const dirZ = playerDirection.z;
+    const dirLength = Math.sqrt(dirX * dirX + dirZ * dirZ);
+    if (dirLength < 0.001) return; // Izbegavamo deljenje sa nulom ako igrač gleda pravo gore/dole
+    const normDirX = dirX / dirLength;
+    const normDirZ = dirZ / dirLength;
 
     const visibleChunks = new Set();
 
-    for (let x = pChunkX - RENDER_DIST; x <= pChunkX + RENDER_DIST; x++) {
-        for (let z = pChunkZ - RENDER_DIST; z <= pChunkZ + RENDER_DIST; z++) {
-            const chunkKey = `${x},${z}`;
-            visibleChunks.add(chunkKey);
+    // Prolazimo kroz maksimalno moguću kvadratnu oblast oko igrača
+    for (let x = pChunkX - MAX_RENDER_DIST; x <= pChunkX + MAX_RENDER_DIST; x++) {
+        for (let z = pChunkZ - MAX_RENDER_DIST; z <= pChunkZ + MAX_RENDER_DIST; z++) {
+            
+            const deltaX = x - pChunkX;
+            const deltaZ = z - pChunkZ;
 
-            if (!loadedChunks.has(chunkKey)) {
-                generateChunk(x, z);
+            // Projektujemo vektor do čanka na pravac gledanja igrača
+            const forwardDist = deltaX * normDirX + deltaZ * normDirZ;
+            // Projektujemo na vektor sa strane (desni)
+            const sideDist = Math.abs(deltaX * -normDirZ + deltaZ * normDirX);
+
+            // Proveravamo da li je čank unutar definisanog pravougaonika ispred/iza/sa strane
+            if (forwardDist >= -RENDER_DIST_BACK && forwardDist <= RENDER_DIST_FRONT && sideDist <= RENDER_DIST_SIDE) {
+                const chunkKey = `${x},${z}`;
+                visibleChunks.add(chunkKey);
+
+                if (!loadedChunks.has(chunkKey)) {
+                    if (!chunkLoadQueue.some(c => c.x === x && c.z === z)) {
+                        chunkLoadQueue.push({ x, z });
+                    }
+                }
             }
         }
     }
 
+    // Uklanjamo čankove koji više nisu vidljivi
     for (const [key, chunkGroup] of loadedChunks.entries()) {
         if (!visibleChunks.has(key)) {
             scene.remove(chunkGroup);
@@ -518,9 +599,55 @@ function updateChunks() {
         }
     }
 
+    // NOVO: Brišemo iz reda one čankove koji više nisu vidljivi
+    for (let i = chunkLoadQueue.length - 1; i >= 0; i--) {
+        const qKey = `${chunkLoadQueue[i].x},${chunkLoadQueue[i].z}`;
+        if (!visibleChunks.has(qKey)) {
+            chunkLoadQueue.splice(i, 1);
+        }
+    }
+
+    // Ažuriramo listu aktivnih grupa za raycasting
+    updateActiveGroups();
+}
+
+function updateActiveGroups() {
     activeGroups.length = 0;
     for (const chunkGroup of loadedChunks.values()) {
         activeGroups.push(chunkGroup);
+    }
+}
+
+async function processChunkQueue() {
+    if (chunkLoadQueue.length === 0 || isGeneratingChunk) return;
+
+    isGeneratingChunk = true;
+
+    try {
+        const pChunkX = Math.floor(camera.position.x / CHUNK_SIZE);
+        const pChunkZ = Math.floor(camera.position.z / CHUNK_SIZE);
+
+        chunkLoadQueue.sort((a, b) => {
+            const distA = Math.abs(a.x - pChunkX) + Math.abs(a.z - pChunkZ);
+            const distB = Math.abs(b.x - pChunkX) + Math.abs(b.z - pChunkZ);
+            return distA - distB;
+        });
+
+        const chunk = chunkLoadQueue.shift();
+        const chunkKey = `${chunk.x},${chunk.z}`;
+        
+        // Samo ako već nije učitan (možda ga je updateChunks već sredio)
+        if (!loadedChunks.has(chunkKey)) {
+            await generateChunk(chunk.x, chunk.z);
+        }
+    } catch (error) {
+        console.error("Greška pri generisanju čanka:", error);
+    } finally {
+        // OVO JE NAJVAŽNIJE: Otključava sistem bez obzira na sve
+        isGeneratingChunk = false;
+        
+        // Opciono: osveži listu za raycasting (ako je potrebno)
+        updateActiveGroups(); 
     }
 }
 
@@ -583,6 +710,12 @@ class ParticleSystem {
             if (p && p.life > 0) {
                 p.velocity.y += gravity * deltaTime;
                 p.position.addScaledVector(p.velocity, deltaTime);
+
+                // NOVO: Čestice se zaustavljaju kada udare u blok
+                if (hasBlockAt(Math.floor(p.position.x), Math.floor(p.position.y), Math.floor(p.position.z))) {
+                    p.life = 0;
+                }
+
                 p.life -= deltaTime * 2.5; 
                 p.scale = Math.max(0, p.life);
 
@@ -624,10 +757,6 @@ document.addEventListener('keydown', (e) => {
         canJump = false;
     }
     
-    if (e.code === 'KeyK') {
-        resetWorld(); // Ovo čisti scenu
-        updateChunks(); // Ovo generiše nove čankove samo kada ti želiš
-    }
     if (e.code.startsWith('Digit')) {
         const num = parseInt(e.key);
         if (num >= 1 && num <= 9) changeActiveSlot(num);
@@ -774,36 +903,32 @@ document.addEventListener('mousedown', (e) => {
         const blockKey = `${rx},${ry},${rz}`;
         const blockType = instMesh.userData.type;
 
-        if (e.button === 0) { // Levi klik - kopanje
+        if (e.button === 0) { // LEVI KLIK - KOPANJE
             if (blockType === 'bedrock') return;
+
+            playSound(mineSound);
 
             const particleColor = blockColors[blockType] || 0x737373;
             blockParticles.spawn(pos, particleColor, 12);
-
             modifiedBlocks.set(blockKey, { action: 'delete' });
+            refreshChunksAround(rx, rz);
 
-            // OPTIMIZACIJA: Ažuriraj samo ako je na ivici čanka
-            regenerateChunkAt(rx, rz);
-            if (rx % CHUNK_SIZE === 0) regenerateChunkAt(rx - 1, rz);
-            if (rx % CHUNK_SIZE === CHUNK_SIZE - 1) regenerateChunkAt(rx + 1, rz);
-            if (rz % CHUNK_SIZE === 0) regenerateChunkAt(rx, rz - 1);
-            if (rz % CHUNK_SIZE === CHUNK_SIZE - 1) regenerateChunkAt(rx, rz + 1);
-
-        } else if (e.button === 2) { // Desni klik - gradnja
+        } else if (e.button === 2) { // DESNI KLIK - GRADNJA
             const normal = intersect.face.normal;
             const bx = rx + normal.x;
             const by = ry + normal.y;
             const bz = rz + normal.z;
 
+            // ... (tvoja postojeća provera sudara ostaje ista)
             const playerFeetY = camera.position.y - 1.6;
             const overlapX = Math.abs(bx - camera.position.x) < 0.6;
             const overlapZ = Math.abs(bz - camera.position.z) < 0.6;
             const overlapY = (by + 0.5 > playerFeetY) && (by - 0.5 < camera.position.y);
 
             if (!(overlapX && overlapY && overlapZ)) {
-                const newKey = `${bx},${by},${bz}`;
-                modifiedBlocks.set(newKey, { action: 'create', type: selectedBlock });
-                regenerateChunkAt(bx, bz);
+                modifiedBlocks.set(`${bx},${by},${bz}`, { action: 'create', type: selectedBlock });
+                playSound(placeSound);
+                refreshChunksAround(bx, bz);
             }
         }
     }
@@ -817,23 +942,15 @@ const highlightBox = new THREE.Mesh(
 scene.add(highlightBox);
 
 // =========================================================================
-// 11. MOBILNE KONTROLE I DETEKCIJA DODIRA
+// 10. FUNKCIJA ZA PODEŠAVANJE MOBILNIH KONTROLA
 // =========================================================================
 
-// Detekcija da li korisnik koristi mobilni telefon
-const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-
-if (isMobile) {
+function setupMobileControls() {
     // Prikaži mobilne komande
     document.getElementById('mobile-controls').style.display = 'flex';
     
     // Zaobilazimo PointerLock na mobilnom i ručno aktiviramo igru
-    const overlay = document.getElementById('overlay');
-    overlay.replaceWith(overlay.cloneNode(true)); // Uklanja stari click listener
-    document.getElementById('overlay').addEventListener('click', (e) => {
-        document.getElementById('overlay').style.display = 'none';
-        controls.isLocked = true; // Varamo engine da pomisli da je miš zaključan kako bi radilo kretanje
-    });
+    controls.isLocked = true; // Varamo engine da pomisli da je miš zaključan kako bi radilo kretanje
 
     // 1. Gledanje okolo (Touch Look) pomoću prevlačenja prsta
     let touchStartX = 0, touchStartY = 0;
@@ -908,15 +1025,12 @@ if (isMobile) {
             if (action === 'mine') {
                 if (instMesh.userData.type === 'bedrock') return;
 
+                playSound(mineSound);
+
                 const particleColor = blockColors[instMesh.userData.type] || 0x737373;
                 blockParticles.spawn(pos, particleColor, 12);
                 modifiedBlocks.set(blockKey, { action: 'delete' });
-
-                regenerateChunkAt(rx, rz);
-                if (rx % CHUNK_SIZE === 0) regenerateChunkAt(rx - 1, rz);
-                if (rx % CHUNK_SIZE === CHUNK_SIZE - 1) regenerateChunkAt(rx + 1, rz);
-                if (rz % CHUNK_SIZE === 0) regenerateChunkAt(rx, rz - 1);
-                if (rz % CHUNK_SIZE === CHUNK_SIZE - 1) regenerateChunkAt(rx, rz + 1);
+                refreshChunksAround(rx, rz);
 
             } else if (action === 'place') {
                 const normal = intersect.face.normal;
@@ -931,7 +1045,8 @@ if (isMobile) {
 
                 if (!(overlapX && overlapY && overlapZ)) {
                     modifiedBlocks.set(`${bx},${by},${bz}`, { action: 'create', type: selectedBlock });
-                    regenerateChunkAt(bx, bz);
+                    playSound(placeSound);
+                    refreshChunksAround(bx, bz);
                 }
             }
         }
@@ -950,8 +1065,48 @@ if (isMobile) {
 }
 
 // =========================================================================
-// 10. GAME LOOP (Animacija i fizika)
+// 11. ODABIR NAČINA IGRANJA I START IGRE
 // =========================================================================
+const screenMain = document.getElementById('screen-main');
+const screenSelect = document.getElementById('screen-select');
+const screenCreate = document.getElementById('screen-create');
+const screenDevice = document.getElementById('screen-device');
+
+// Pomoćna funkcija za promenu ekrana
+function showScreen(screen) {
+    document.querySelectorAll('.menu-screen').forEach(s => s.classList.remove('active'));
+    screen.classList.add('active');
+}
+
+// Navigacija iz Glavnog Menija
+document.getElementById('btn-singleplayer').addEventListener('click', () => showScreen(screenSelect));
+
+// Navigacija iz Select World
+document.getElementById('btn-go-create').addEventListener('click', () => showScreen(screenCreate));
+document.getElementById('btn-cancel-select').addEventListener('click', () => showScreen(screenMain));
+document.getElementById('btn-play-world').addEventListener('click', () => showScreen(screenDevice));
+
+// Navigacija iz Create World
+document.getElementById('btn-cancel-create').addEventListener('click', () => showScreen(screenSelect));
+document.getElementById('btn-create-world').addEventListener('click', () => {
+    // Ovde bi išla logika za generisanje novog seed-a sveta
+    showScreen(screenDevice);
+});
+
+// Finalno pokretanje igre (Device izbor)
+document.getElementById('start-desktop').addEventListener('click', () => {
+    controls.lock();
+    document.getElementById('overlay').style.display = 'none';
+});
+
+document.getElementById('start-mobile').addEventListener('click', () => {
+    setupMobileControls();
+    document.getElementById('overlay').style.display = 'none';
+});
+
+// =========================================================================
+// 12. GAME LOOP (Animacija i fizika)
+// =================================================S
 const clock = new THREE.Clock();
 let raycastThrottle = 0; 
 const tempMatrix = new THREE.Matrix4(); 
@@ -964,6 +1119,9 @@ function animate() {
     blockParticles.update(deltaTime);
 
     if (controls.isLocked) {
+        updateChunks();
+        processChunkQueue(); // <-- DODAJ OVU LINIJU OVDE
+
         const oldX = camera.position.x;
         const oldZ = camera.position.z;
 
