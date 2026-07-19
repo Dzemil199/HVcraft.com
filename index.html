@@ -158,23 +158,38 @@
         }
 
         .friend-item {
-            padding: 10px;
-            border-bottom: 1px solid #333;
-            color: #4CAF50;
+            padding: 12px;
+            margin-bottom: 8px;
+            border: 1px solid rgba(255,255,255,.09);
+            border-left: 4px solid #666;
+            border-radius: 6px;
+            color: #fff;
             display: flex;
             justify-content: space-between;
             align-items: center;
             font-size: 14px;
+            background: rgba(255,255,255,.035);
+            transition: background .15s ease, transform .15s ease;
         }
 
         .friend-item:hover {
-            background: rgba(76, 175, 80, 0.1);
+            background: rgba(76, 175, 80, 0.14);
+            transform: translateX(3px);
         }
 
+        .friend-item.online { border-left-color: #4CAF50; }
+        .friend-item.offline { opacity: .68; }
+        .friend-name { font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 68%; }
         .friend-status {
-            color: #4CAF50;
             font-weight: bold;
+            font-size: 11px;
+            letter-spacing: .3px;
         }
+        .friends-toolbar { display: flex; gap: 8px; margin: 0 0 10px; }
+        #friends-filter { flex: 1; min-width: 0; box-sizing: border-box; padding: 8px 10px; color: #fff; background: #171717; border: 1px solid #555; border-radius: 4px; font-family: inherit; }
+        #friends-filter:focus { outline: none; border-color: #4CAF50; }
+        #friends-count { color: #a9e8ac; font-size: 12px; white-space: nowrap; }
+        .friends-empty { color: #aaa; text-align: center; padding: 28px 10px; line-height: 1.5; }
 
         #online-friends-panel::-webkit-scrollbar {
             width: 8px;
@@ -235,14 +250,33 @@
 </head>
 <body>
 
+    <!-- Iskačući prozor za zahtev za prijateljstvo -->
+    <div id="friend-request-modal" style="display: none; position: absolute; top: 20px; left: 50%; transform: translateX(-50%); background: rgba(0, 0, 0, 0.8); color: white; padding: 20px; border: 2px solid #4CAF50; border-radius: 8px; z-index: 2000;">
+        <p style="margin-top: 0;"><strong id="requester-name">Neko</strong> želi da te doda za prijatelja!</p>
+        <div style="display: flex; gap: 10px; justify-content: center;">
+            <button id="btn-accept-friend" style="background: #4CAF50; color: white; border: none; padding: 8px 15px; cursor: pointer; border-radius: 4px;">Prihvati</button>
+            <button id="btn-decline-friend" style="background: #f44336; color: white; border: none; padding: 8px 15px; cursor: pointer; border-radius: 4px;">Odbij</button>
+        </div>
+    </div>
+
+    <!-- Prikaz ulogovanog korisnika -->
+    <div id="player-info-display">
+        Korisničko ime: <span id="current-username-display">Gost</span>
+    </div>
+
     <!-- Friend System Meni -->
     <div id="multiplayer-menu" class="menu-screen" style="background: #3a3a3a url('https://www.transparenttextures.com/patterns/cubes.png') repeat;">
         <h2 style="text-shadow: 2px 2px #000;">🎮 FRIENDS</h2>
         
         <div style="width: 600px; margin-bottom: 30px; border: 2px solid #222; padding: 20px; background: rgba(0,0,0,0.3);">
             <h3 style="text-shadow: 1px 1px #000; margin-top: 0;">Dodaj Prijatelja</h3>
-            <input type="text" id="friend-search-input" class="mc-input" placeholder="Unesi username prijatelja...">
-            <button onclick="window.searchAndAddFriend()" class="mc-btn" style="width: 100%;">🔍 Pronađi & Dodaj</button>
+            <div style="position: relative; width: 100%; margin: 0 auto;">
+                <input type="text" id="search-player-input" class="mc-input" placeholder="Ukucaj ime igrača..." autocomplete="off">
+                
+                <!-- Ovde će se ubacivati rezultati pretrage -->
+                <div id="search-results" style="display: none; position: absolute; top: 100%; left: 0; width: 100%; background: rgba(30, 30, 30, 0.9); border: 1px solid #4CAF50; max-height: 150px; overflow-y: auto; z-index: 1000; text-align: left;">
+                </div>
+            </div>
         </div>
 
         <div style="width: 600px; margin-bottom: 30px; border: 2px solid #222; padding: 20px; background: rgba(0,0,0,0.3);">
@@ -254,6 +288,10 @@
 
         <div style="width: 600px; margin-bottom: 30px; border: 2px solid #222; padding: 20px; background: rgba(0,0,0,0.3);">
             <h3 style="text-shadow: 1px 1px #000; margin-top: 0;">👥 Moji Prijatelji</h3>
+            <div class="friends-toolbar">
+                <input id="friends-filter" type="search" placeholder="Filtriraj prijatelje..." autocomplete="off">
+                <button onclick="window.refreshFriendsList()" class="mc-btn" style="width: auto; padding: 7px 12px;">Osveži</button>
+            </div>
             <div id="friends-list-menu" style="background: rgba(0,0,0,0.5); min-height: 150px; padding: 10px; border-radius: 4px; max-height: 250px; overflow-y: auto;">
                 <p style="color: #888; margin: 0;">Nemaš prijatelja. Dodaj nečim!<br><br>Klikni "Pronađi & Dodaj" gore</p>
             </div>
@@ -427,16 +465,16 @@
     "></div>
 
     <div id="hotbar">
-    <div class="slot active" data-type="grass" style="background: #0b0b0b;">1</div>
-    <div class="slot" data-type="stone" style="background: #000;">2</div>
-    <div class="slot" data-type="wood" style="background: #8b5a2b;">3</div>
-    <div class="slot" data-type="glass" style="background: rgba(173, 216, 230, 0.5);">4</div>
-    <div class="slot" data-type="leaves" style="background: #224416;">5</div>
-    <div class="slot" data-type="water" style="background: #1e90ff;">6</div>
-    <div class="slot" style="background: #444;">7</div>
-    <div class="slot" style="background: #444;">8</div>
-    <div class="slot" style="background: #444;">9</div>
-    <div class="slot" style="background: #444;">10</div>
+    <div class="slot active" data-type="grass" style="background: #0b0b0b;">1<span class="item-count"></span></div>
+    <div class="slot" data-type="stone" style="background: #000;">2<span class="item-count"></span></div>
+    <div class="slot" data-type="wood" style="background: #8b5a2b;">3<span class="item-count"></span></div>
+    <div class="slot" data-type="glass" style="background: rgba(173, 216, 230, 0.5);">4<span class="item-count"></span></div>
+    <div class="slot" data-type="leaves" style="background: #224416;">5<span class="item-count"></span></div>
+    <div class="slot" data-type="water" style="background: #1e90ff;">6<span class="item-count"></span></div>
+    <div class="slot" style="background: #444;">7<span class="item-count"></span></div>
+    <div class="slot" style="background: #444;">8<span class="item-count"></span></div>
+    <div class="slot" style="background: #444;">9<span class="item-count"></span></div>
+    <div class="slot" style="background: #444;">10<span class="item-count"></span></div>
 </div>
 
     <div id="canvas-container"></div>
@@ -495,6 +533,18 @@
         }
 
         // Prikazi notifikacije za zahteve tokom igre
+        window.refreshFriendsList = function() {
+            updateFriendsListUI();
+            if (typeof window.refreshFriendStatuses === 'function') window.refreshFriendStatuses();
+        };
+
+        document.getElementById('friends-filter').addEventListener('input', () => {
+            const query = document.getElementById('friends-filter').value.trim().toLocaleLowerCase();
+            document.querySelectorAll('#friends-list-menu .friend-item').forEach((item) => {
+                item.style.display = item.dataset.username.toLocaleLowerCase().includes(query) ? '' : 'none';
+            });
+        });
+
         function showFriendRequestNotification(username) {
             const container = document.getElementById('friend-requests-container');
             container.style.display = 'block';

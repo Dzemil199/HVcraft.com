@@ -3,6 +3,7 @@
 .slot {
     /* ... ostalo ... */
     color: transparent; /* Ovo sakriva tekst "Trava", "Kamen" itd. */
+    position: relative; /* Potrebno za pozicioniranje brojača itema */
 }
 #game-ui {
     position: absolute;
@@ -254,3 +255,15 @@
 }
 
 .mt-20 { margin-top: 20px; }
+
+/* Brojač itema u hotbaru */
+.item-count {
+    position: absolute;
+    bottom: 2px;
+    right: 4px;
+    color: white;
+    font-size: 14px;
+    font-family: 'Minecraft', sans-serif;
+    text-shadow: 2px 2px 0px #3f3f3f;
+    pointer-events: none; /* Da ne ometa kliktanje na slot */
+}

@@ -1,11 +1,6 @@
 import * as THREE from 'three';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 
-// --- MULTIPLAYER KONEKCIJA ---
-// Definisano na najvišem nivou da bi se izbegle "ReferenceError" greške
-let peer = null;
-let conn = null;
-let otherPlayerMesh = null;
 
 // =========================================================================
 // 1. GLOBALNA PODEŠAVANJA SVETA
@@ -24,9 +19,9 @@ const activeGroups = [];
 
 // Boje za čestice u zavisnosti od bloka koji kopamo
 const blockColors = {
-    grass: 0x777777, dirt: 0x555555, stone: 0x888888,
-    wood: 0x666666, glass: 0xaaaaaa, bedrock: 0x333333,
-    leaves: 0x444444, water: 0x999999
+    grass: 0x55a030, dirt: 0x8b4513, stone: 0x7f7f7f,
+    wood: 0xa0522d, glass: 0xaaaaaa, bedrock: 0x1a1a1a,
+    leaves: 0x224416, water: 0x0044aa
 };
 
 
@@ -149,14 +144,31 @@ function createCodeTexture(baseColor, type) {
         }
     } 
     else if (type === 'stone') {
-        // Dodajemo "mrlje" za pravi kameni izgled
+        // Mrlje za pravi kameni izgled
         ctx.fillStyle = '#666666';
         for(let i=0; i<100; i++) {
             ctx.beginPath();
             ctx.arc(Math.random()*128, Math.random()*128, Math.random()*8, 0, Math.PI*2);
             ctx.fill();
         }
+        // Dodatni detalji - pukotine i veneri kamena
+        ctx.strokeStyle = '#555555';
+        ctx.lineWidth = 1;
+        for(let i=0; i<8; i++) {
+            ctx.beginPath();
+            ctx.moveTo(Math.random()*128, Math.random()*128);
+            ctx.lineTo(Math.random()*128, Math.random()*128);
+            ctx.stroke();
+        }
     } 
+    else if (type === 'bedrock') {
+        // Crno-sivi bedrok sa geometrijskim šarama
+        ctx.fillStyle = '#1a1a1a';
+        for(let i=0; i<60; i++) {
+            ctx.fillStyle = i % 3 === 0 ? '#333333' : '#111111';
+            ctx.fillRect(Math.random()*128, Math.random()*128, Math.random()*15+3, Math.random()*15+3);
+        }
+    }
     else if (type === 'dirt') {
         // Dodajemo "zrnatost" zemlji
         ctx.fillStyle = '#5d3a1a';
@@ -186,7 +198,7 @@ const materials = {
         transparent: true, 
         opacity: 0.3 
     }),
-    bedrock: new THREE.MeshLambertMaterial({ map: createCodeTexture('#2a2a2a', 'bedrock') })
+    bedrock: new THREE.MeshLambertMaterial({ map: createCodeTexture('#111111', 'bedrock') })
 };
 
 const blockGeometry = new THREE.BoxGeometry(1, 1, 1);
@@ -332,18 +344,30 @@ function getHeight(x, z) {
 
 function isCave(x, y, z) {
     const surfaceHeight = getHeight(x, z);
-    if (y >= surfaceHeight - 5) return false; 
+    // Pećine počinju tek 6 blokova ispod površine
+    if (y >= surfaceHeight - 6) return false;
+    // Ispod bedroka nema pećina
+    if (y <= surfaceHeight - 78) return false;
     
-    const nx = (x + seedX) * 0.05;
-    const ny = y * 0.08;
-    const nz = (z + seedZ) * 0.05;
+    const nx = (x + seedX) * 0.04;
+    const ny = y * 0.06;
+    const nz = (z + seedZ) * 0.04;
 
-    // Generisanje dva uvijena 3D "talasa"
-    const wave1 = Math.sin(nx) + Math.cos(ny) + Math.sin(nz);
-    const wave2 = Math.sin(nx * 1.5 - ny) + Math.cos(nz * 1.5 + nx);
+    // Pećinski tuneli - dva talasa koji se ukrštaju
+    const wave1 = Math.sin(nx) + Math.cos(ny * 1.2) + Math.sin(nz);
+    const wave2 = Math.sin(nx * 1.7 - ny * 0.5) + Math.cos(nz * 1.7 + nx * 0.5);
     
-    // Gde se ukrste niske tačke oba talasa, stvaramo duguljasti, haotični tunel
-    return (Math.abs(wave1) < 0.6 && Math.abs(wave2) < 0.6);
+    // Prag 0.7 = manje pećina ali veće i lepše
+    const isTunnel = (Math.abs(wave1) < 0.7 && Math.abs(wave2) < 0.7);
+    
+    // Ogromne pećinske dvorane (retke)
+    const cx = (x + seedX) * 0.02;
+    const cy = y * 0.03;
+    const cz = (z + seedZ) * 0.02;
+    const caveRoom = Math.sin(cx * 2.3) * Math.cos(cy * 1.8) * Math.sin(cz * 2.1);
+    const isRoom = caveRoom > 0.55;
+    
+    return isTunnel || isRoom;
 }
 
 // =========================================================================
@@ -474,15 +498,17 @@ function hasBlockAt(bx, by, bz) {
 
     const surfaceHeight = getHeight(bx, bz);
 
+    // Bedrok sloj - uvek solidan (80 blokova ispod površine)
+    const bedrockFloor = surfaceHeight - 80;
+    if (by <= bedrockFloor) return true;
+
     // OPTIMIZACIJA: Drveće raste samo iznad zemlje! 
     // Preskakanje ovoga za podzemlje drastično ubrzava igru!
     if (by > surfaceHeight) {
         return isTreeBlockAt(bx, by, bz);
     }
 
-    if (by <= WORLD_DEPTH + 2) return true; 
-
-    // Ako smo pod zemljom, ostaje samo provera za pećine
+    // Ako smo pod zemljom, provera za pećine
     if (isCave(bx, by, bz)) return false; 
 
     return true;
@@ -493,6 +519,33 @@ function isBlockExposed(x, y, z) {
            !hasBlockAt(x, y+1, z) || !hasBlockAt(x, y-1, z) ||
            !hasBlockAt(x, y, z+1) || !hasBlockAt(x, y, z-1);
 }
+
+// Primer kako se generiše slojeviti teren (konceptualno):
+// Prolaziš kroz X i Z koordinate kao i do sada.
+// for (let x = 0; x < sirinaSveta; x++) {
+//     for (let z = 0; z < duzinaSveta; z++) {
+        
+//         // 1. Dobiješ visinu površine iz tvoje noise funkcije
+//         let povrsinaY = Math.floor(tvojNoiseFunkcija(x, z) * maxVisina);
+
+//         // 2. Petlja koja kreće od dna (y=0) do površine
+//         for (let y = 0; y <= povrsinaY; y++) {
+            
+//             // Odlučujemo koji blok postavljamo u zavisnosti od dubine
+//             if (y === povrsinaY) {
+//                 // Na samom vrhu je trava
+//                 napraviBlok(x, y, z, 'grass');
+//             } else if (y > povrsinaY - 3) {
+//                 // Odmah ispod trave je zemlja (dirt)
+//                 napraviBlok(x, y, z, 'dirt');
+//             } else {
+//                 // Sve ispod toga je kamen
+//                 napraviBlok(x, y, z, 'stone');
+//             }
+            
+//         }
+//     }
+// }
 
 // Dodaj parametar isImmediate = false (po defaultu je sporo za istraživanje)
 async function generateChunk(cx, cz, isImmediate = false) {
@@ -513,33 +566,34 @@ async function generateChunk(cx, cz, isImmediate = false) {
         for (let z = startZ; z < startZ + CHUNK_SIZE; z++) {
             const surfaceHeight = getHeight(x, z);
 
-            // 1. GENERIŠEMO POVRŠINU
-            // Idemo od vrha terena, pa samo nekoliko blokova na dole
-            for (let y = surfaceHeight; y >= surfaceHeight - 5; y--) {
+            // Bedrok je 80 blokova ispod površine (vidljivi deo sveta)
+            const UNDERGROUND_DEPTH = 80;
+            const bedrockFloor = surfaceHeight - UNDERGROUND_DEPTH;
+
+            // 1. GENERIŠEMO POVRŠINU + PODZEMLJE (kamen + pećine)
+            for (let y = surfaceHeight; y >= bedrockFloor + 1; y--) {
                 const blockKey = `${x},${y},${z}`;
                 if (modifiedBlocks.has(blockKey) && modifiedBlocks.get(blockKey).action === 'delete') continue;
                 
-                if (!hasBlockAt(x, y, z)) continue; // Provera za pećine
-                if (!isBlockExposed(x, y, z)) continue; // Optimizacija
+                if (!hasBlockAt(x, y, z)) continue; // Prazno = pećina ili vazduh
+                if (!isBlockExposed(x, y, z)) continue; // Sakriven blok = preskoči
 
                 let type;
                 if (y === surfaceHeight) {
                     type = (y < WATER_LEVEL) ? 'dirt' : 'grass';
-                } else if (y > surfaceHeight - 5) { // 4 bloka zemlje
+                } else if (y > surfaceHeight - 4) { // 3 bloka zemlje ispod trave
                     type = 'dirt';
-                } else { // 5. blok je kamen
+                } else { // Sve ispod je kamen do bedroka
                     type = 'stone';
                 }
                 blocksByType[type].push({ x, y, z });
             }
 
-            // 2. STAVLJAMO BEDROK SKROZ NA DNO
-            const bedrockY = WORLD_DEPTH;
-            const bedrockKey = `${x},${bedrockY},${z}`;
-            if (!(modifiedBlocks.has(bedrockKey) && modifiedBlocks.get(bedrockKey).action === 'delete')) {
-                if (isBlockExposed(x, bedrockY, z)) {
-                    blocksByType['bedrock'].push({ x, y: bedrockY, z });
-                }
+            // 2. BEDROK SLOJ - nerazorivi pod sveta
+            for (let by = bedrockFloor; by >= bedrockFloor - 2; by--) {
+                const bedrockKey = `${x},${by},${z}`;
+                if (modifiedBlocks.has(bedrockKey) && modifiedBlocks.get(bedrockKey).action === 'delete') continue;
+                blocksByType['bedrock'].push({ x, y: by, z });
             }
 
             // 3. GENERIŠEMO VODU (ako je teren ispod nivoa vode)
@@ -792,7 +846,13 @@ async function processChunkQueue() {
 }
 
 console.log("Kamera je na:", camera.position);
-camera.position.set(10, 10, 10);
+// Kada se igra učita, postavljamo igrača na početnu poziciju.
+const spawnX = 0;
+const spawnZ = 0;
+// Nađi koliko je visoka zemlja na toj tački
+const spawnY = getHeight(spawnX, spawnZ);
+// Postavi igrača malo IZNAD te visine (+3 bloka)
+camera.position.set(spawnX, spawnY + 3, spawnZ);
 
 // =========================================================================
 // 7. SISTEM ČESTICA ZA KOPANJE (InstancedMesh)
@@ -885,6 +945,14 @@ const jumpStrength = 0.14;
 let canJump = false;
 const playerRadius = 0.3;
 
+// Inventar za survival mod
+let inventory = {
+    grass: 0, dirt: 0, stone: 0, wood: 0, leaves: 0, glass: 0, water: 0
+};
+
+// Niz za praćenje dropovanih itema u svetu
+const droppedItems = [];
+
 // Survival mehanike
 let gameMode = 'survival'; // 'survival' ili 'creative'
 let health = 20; // 10 srca, svako srce ima 2 poena
@@ -895,6 +963,22 @@ let isFalling = false;
 let isMining = false;
 let miningProgress = 0;
 let currentMiningTarget = null; // Informacije o bloku koji se trenutno kopa
+
+// Vreme kopanja u sekundama za Survival. Creative i dalje ruši blok odmah.
+const SURVIVAL_MINING_TIME = Object.freeze({
+    grass: 0.65,
+    dirt: 0.55,
+    leaves: 0.3,
+    wood: 1.35,
+    stone: 2.4,
+    glass: 0.2,
+    water: 0.1
+});
+const DEFAULT_SURVIVAL_MINING_TIME = 1.2;
+
+function getSurvivalMiningTime(blockType) {
+    return SURVIVAL_MINING_TIME[blockType] ?? DEFAULT_SURVIVAL_MINING_TIME;
+}
 
 document.addEventListener('keydown', (e) => {
     if (e.code === 'KeyW') keys.w = true;
@@ -1064,15 +1148,16 @@ document.addEventListener('mousedown', (e) => {
 
     // --- PVP HIT CHECK (za desni klik) ---
     // Prioritet je udarac, ako promašimo, onda se izvršava logika za postavljanje bloka
-    if (e.button === 2) {
-        if (otherPlayerMesh && conn && conn.open) {
-            const distance = camera.position.distanceTo(otherPlayerMesh.position);
-            if (distance < 4) {
-                console.log("Udario si igrača!");
-                conn.send({ type: 'hit', damage: 2 });
-                return; // Udarili smo igrača, ne radimo ništa drugo
+    if (e.button === 2) { // Desni klik
+        // Prolazimo kroz sve online prijatelje da proverimo da li smo nekog udarili
+        Object.values(onlineFriends).forEach(friend => {
+            if (friend.avatar) {
+                const distance = camera.position.distanceTo(friend.avatar.position);
+                if (distance < 4) {
+                    // TODO: Implementirati slanje 'hit' poruke
+                }
             }
-        }
+        });
     }
 
     raycaster.setFromCamera(mouse, camera);
@@ -1099,10 +1184,18 @@ document.addEventListener('mousedown', (e) => {
 
             if (gameMode === 'creative') {
                 // CREATIVE: Odmah ruši blok!
-                // playSound(mineSound);
                 const particleColor = blockColors[blockType] || 0x737373;
                 blockParticles.spawn(pos, particleColor, 12);
                 modifiedBlocks.set(blockKey, { action: 'delete' });
+
+                // Obavesti druge igrače o promeni
+                broadcastData({
+                    type: 'block-action',
+                    action: 'break',
+                    pos: { x: rx, y: ry, z: rz },
+                    blockType: blockType
+                });
+
                 refreshChunksAround(rx, rz);
             } else if (gameMode === 'survival') {
                 // SURVIVAL: Započni animaciju kopanja
@@ -1123,21 +1216,42 @@ document.addEventListener('mousedown', (e) => {
             const by = ry + normal.y;
             const bz = rz + normal.z;
 
+            // U survival modu, proveri da li imamo blok u inventaru
+            if (gameMode === 'survival') {
+                if (inventory[selectedBlock] > 0) {
+                    inventory[selectedBlock]--;
+                    updateInventoryUI();
+                } else {
+                    // Nema dovoljno blokova, ne radi ništa
+                    return;
+                }
+            }
+
             const playerFeetY = camera.position.y - 1.6;
             const overlapX = Math.abs(bx - camera.position.x) < 0.6;
             const overlapZ = Math.abs(bz - camera.position.z) < 0.6;
             const overlapY = (by + 0.5 > playerFeetY) && (by - 0.5 < camera.position.y);
 
             if (!(overlapX && overlapY && overlapZ)) {
-                // --- PUSTI ZVUK POSTAVLJANJA ---
-                // playPlaceSound();
-
                 modifiedBlocks.set(`${bx},${by},${bz}`, { action: 'create', type: selectedBlock });
                 refreshChunksAround(bx, bz);
+
+                // Obavesti druge igrače o postavljanju bloka
+                broadcastData({
+                    type: 'block-action',
+                    action: 'place',
+                    pos: { x: bx, y: by, z: bz },
+                    blockType: selectedBlock
+                });
             }
         }
     }
 });
+
+function createItemDrop(position, type) {
+    // Implementacija će biti dodata kasnije
+}
+
 
 // Selekcioni okvir
 const highlightBox = new THREE.Mesh(
@@ -1227,14 +1341,7 @@ function setupMobileControls() {
             const rz = Math.round(pos.z);
             const blockKey = `${rx},${ry},${rz}`;
 
-            if (action === 'mine') {
-                // Istovremeno proverava i da li je udario igrača
-                if (otherPlayerMesh && conn && conn.open) {
-                    if (camera.position.distanceTo(otherPlayerMesh.position) < 4) {
-                        conn.send({ type: 'hit', damage: 2 });
-                    }
-                }
-
+            if (action === 'mine') { // Na mobilnom, kopanje je uvek instant kao u creative modu
                 if (instMesh.userData.type === 'bedrock') return;
 
                 // playSound(mineSound);
@@ -1243,6 +1350,14 @@ function setupMobileControls() {
                 blockParticles.spawn(pos, particleColor, 12);
                 modifiedBlocks.set(blockKey, { action: 'delete' });
                 refreshChunksAround(rx, rz);
+
+                // Obavesti druge igrače
+                broadcastData({
+                    type: 'block-action',
+                    action: 'break',
+                    pos: { x: rx, y: ry, z: rz },
+                    blockType: instMesh.userData.type
+                });
 
             } else if (action === 'place') {
                 const normal = intersect.face.normal;
@@ -1259,6 +1374,14 @@ function setupMobileControls() {
                     modifiedBlocks.set(`${bx},${by},${bz}`, { action: 'create', type: selectedBlock });
                     // playSound(placeSound);
                     refreshChunksAround(bx, bz);
+
+                    // Obavesti druge igrače
+                    broadcastData({
+                        type: 'block-action',
+                        action: 'place',
+                        pos: { x: bx, y: by, z: bz },
+                        blockType: selectedBlock
+                    });
                 }
             }
         }
@@ -1279,6 +1402,23 @@ function setupMobileControls() {
 // =========================================================================
 // 11. KORISNIČKI INTERFEJS (UI)
 // =========================================================================
+
+// Ažurira prikaz broja itema na hotbaru
+function updateInventoryUI() {
+    if (gameMode !== 'survival') return;
+    document.querySelectorAll('.slot').forEach(slot => {
+        const type = slot.dataset.type;
+        if (inventory.hasOwnProperty(type)) {
+            const countSpan = slot.querySelector('.item-count');
+            if (countSpan) {
+                const count = inventory[type];
+                countSpan.innerText = count > 0 ? count : '';
+            }
+        }
+    });
+}
+
+
 
 // --- AUTHENTICATION ---
 let isLoginMode = true; // Prati da li se logujemo ili pravimo nalog
@@ -1365,6 +1505,7 @@ function loginSuccess(email) {
     document.getElementById('auth-screen').style.display = 'none';
     document.getElementById('overlay').style.display = 'flex'; // Prikaži glavni meni
     console.log("Ulogovan kao: " + email);
+    document.getElementById('current-username-display').innerText = email;
 }
 
 // Funkcija za Logout (ako zatreba)
@@ -1534,6 +1675,7 @@ window.saveAndQuit = function() {
 // =========================================================================
 // FRIEND SISTEM
 // =========================================================================
+let peer = null;
 let currentUser = "";
 let myPeerId = "";
 let friendsList = {};      // { username: { status: 'online'/'offline', peerId: '...', avatar: {...} } }
@@ -1541,20 +1683,45 @@ let pendingRequests = [];   // Zahtevi koji čekaju prihvatanje
 let onlineFriends = {};    // Prati koje prijatelje vidim online
 
 function initFriendSystem() {
-    currentUser = localStorage.getItem('hvcraft_user_email') || 'player';
+    currentUser = localStorage.getItem('hvcraft_user_email');
+    if (!currentUser) {
+        console.log("Korisnik nije ulogovan, friend sistem nije aktivan.");
+        return;
+    }
     
-    // Kreiraj peer ID za ovog igrača
-    peer = new Peer();
+    // Inicijalizujemo Peer sa korisničkim imenom kao ID-jem
+    peer = new Peer(currentUser);
+
     peer.on('open', function(id) {
         myPeerId = id;
-        localStorage.setItem('hvcraft_peerId_' + currentUser, id);
-        console.log("Moj Peer ID:", id);
+        console.log("Moj Peer ID je:", id);
     });
 
     peer.on('connection', function(connection) {
-        console.log("Novi prijatelj se konektovao!");
-        connection.on('data', handleFriendData);
-    });
+        const friendUsername = connection.peer;
+        console.log(`Dolazna konekcija od: ${friendUsername}`);
+
+        // Proveravamo da li je korisnik na listi prijatelja
+        if (friendsList[friendUsername]) {
+            onlineFriends[friendUsername] = {
+                conn: connection,
+                // ostali podaci (avatar, pozicija) će biti dodati kasnije
+            };
+            console.log(`${friendUsername} je sada online.`);
+
+            connection.on('data', (data) => handleFriendData(data));
+
+            connection.on('close', () => {
+                console.log(`Konekcija sa ${friendUsername} je zatvorena.`);
+                if (onlineFriends[friendUsername] && onlineFriends[friendUsername].avatar) {
+                    scene.remove(onlineFriends[friendUsername].avatar);
+                }
+                delete onlineFriends[friendUsername];
+            });
+        } else {
+            // Ovo je verovatno friend request od nekoga ko nije na listi
+            connection.on('data', handleFriendData);
+        }    });
 
     loadFriendsList();
 }
@@ -1562,12 +1729,13 @@ function initFriendSystem() {
 function handleFriendData(data) {
     if (data.type === 'FRIEND_REQUEST') {
         console.log(`Dobio si zahtev za prijateljstvo od: ${data.username}`);
+        // Prikazuje novi modal prozor umesto stare notifikacije
+        prikaziZahtevNaEkranu(data.username);
+
         if (!pendingRequests.includes(data.username)) {
             pendingRequests.push(data.username);
             savePendingRequests();
         }
-        // Prikazuje notifikaciju u igri
-        showFriendRequestNotification(data.username);
         // Ažurira listu u meniju
         if (typeof window.updatePendingRequestsUI === 'function') {
             window.updatePendingRequestsUI();
@@ -1584,10 +1752,41 @@ function handleFriendData(data) {
         }
     } else if (data.type === 'player-move') {
         // Ažuriranje pozicije prijatelja
-        if (onlineFriends[data.username]) {
-            onlineFriends[data.username].position = data.position;
-            onlineFriends[data.username].rotation = data.rotation;
+        const friend = onlineFriends[data.username];
+        if (friend) {
+            // Ako avatar ne postoji, kreiraj ga
+            if (!friend.avatar) {
+                friend.avatar = createPlayerAvatar(data.username);
+                scene.add(friend.avatar);
+                console.log(`Kreiran avatar za ${data.username}`);
+            }
+            // Ažuriraj poziciju i rotaciju
+            friend.avatar.position.set(data.position.x, data.position.y, data.position.z);
+            if (data.quaternion) {
+                 friend.avatar.quaternion.set(data.quaternion._x, data.quaternion._y, data.quaternion._z, data.quaternion._w);
+            }
         }
+    } else if (data.type === 'block-action') {
+        const { pos, action, blockType } = data;
+        const blockKey = `${pos.x},${pos.y},${pos.z}`;
+
+        if (action === 'place') {
+            modifiedBlocks.set(blockKey, { action: 'create', type: blockType });
+            refreshChunksAround(pos.x, pos.z);
+        } else if (action === 'break') {
+            const posVec = new THREE.Vector3(pos.x, pos.y, pos.z);
+            
+            // Prikazujemo čestice kao da je blok uništen
+            const particleColor = blockColors[blockType] || 0x737373;
+            blockParticles.spawn(posVec, particleColor, 12);
+
+            modifiedBlocks.set(blockKey, { action: 'delete' });
+            refreshChunksAround(pos.x, pos.z);
+        }
+    } else if (data.type === 'hit') {
+        // Prijatelj te je udario
+        health = Math.max(0, health - data.damage);
+        updateHearts();
     }
 }
 
@@ -1606,45 +1805,57 @@ function loadFriendsList() {
 }
 
 // Pronalaženje igrača po username-u (u bazi svih registrovanih korisnika)
+// Kratka proverna veza osvežava online/offline status bez ponovnog učitavanja igre.
+window.refreshFriendStatuses = function() {
+    if (!peer || !currentUser) return;
+
+    Object.entries(friendsList).forEach(([username, friend]) => {
+        const probe = peer.connect(username);
+        let settled = false;
+        const updateStatus = (status) => {
+            if (settled) return;
+            settled = true;
+            friend.status = status;
+            saveFriendsList();
+            if (typeof window.updateFriendsListUI === 'function') window.updateFriendsListUI();
+            if (probe.open) probe.close();
+        };
+        probe.on('open', () => updateStatus('online'));
+        probe.on('error', () => updateStatus('offline'));
+    });
+};
+
 function searchPlayer(username) {
     // Proveravamo da li je user registrovan (ako postoji password za njega)
     return localStorage.getItem('hvcraft_pass_' + username) ? username : null;
 }
 
-function sendFriendRequest(toUsername) {
-    if (!searchPlayer(toUsername)) {
-        alert("Korisnik ne postoji!");
+function sendFriendRequest(targetUsername) {
+    if (!targetUsername) return;
+    
+    if (targetUsername === currentUser) {
+        alert("Ne možeš dodati samog sebe!");
         return;
     }
 
-    if (toUsername === currentUser) {
-        alert("Ne možeš se dodati sam sebi!");
-        return;
-    }
-
-    if (friendsList && friendsList[toUsername]) {
+    if (friendsList && friendsList[targetUsername]) {
         alert("Već si prijatelj sa ovim korisnikom!");
         return;
     }
 
-    const targetPeerId = localStorage.getItem('hvcraft_peerId_' + toUsername);
-    if (!targetPeerId) {
-        alert("Nije moguće poslati zahtev. Korisnik nije online ili ne postoji.");
-        return;
-    }
-
-    // Poveži se sa drugim igračem koristeći njegov ID
-    const conn = peer.connect(targetPeerId);
+    console.log("Povezujem se sa igračem: " + targetUsername + "...");
+    
+    // Povezujemo se sa drugim igračem preko njegovog imena (koje je sada PeerID)
+    const conn = peer.connect(targetUsername);
 
     conn.on('open', () => {
         // Kada se veza otvori, pošalji JSON sa tipom zahteva
         conn.send({
             type: 'FRIEND_REQUEST',
-            from: myPeerId, // Tvoj ID
             username: currentUser
         });
         console.log("Zahtev uspesno poslat!");
-        alert("Zahtev poslat!");
+        alert(`Zahtev za prijateljstvo je poslat igraču ${targetUsername}!`);
     });
 
     conn.on('error', (err) => {
@@ -1658,6 +1869,25 @@ function acceptFriendRequest(fromUsername) {
         friendsList[fromUsername] = { status: 'offline', peerId: null };
     }
     saveFriendsList();
+
+    // Potvrdi zahtev pošiljaocu i odmah osveži status na obe strane.
+    const acceptedConnection = peer.connect(fromUsername);
+    acceptedConnection.on('open', () => {
+        acceptedConnection.send({
+            type: 'REQUEST_ACCEPTED',
+            username: currentUser,
+            from: myPeerId
+        });
+        friendsList[fromUsername].status = 'online';
+        friendsList[fromUsername].peerId = fromUsername;
+        saveFriendsList();
+        if (typeof window.updateFriendsListUI === 'function') window.updateFriendsListUI();
+    });
+    acceptedConnection.on('error', () => {
+        friendsList[fromUsername].status = 'offline';
+        saveFriendsList();
+        if (typeof window.updateFriendsListUI === 'function') window.updateFriendsListUI();
+    });
 
     // Ukloni iz pending
     pendingRequests = pendingRequests.filter(u => u !== fromUsername);
@@ -1684,16 +1914,20 @@ function updateFriendsUI() {
     // (implementira se kasnije u pause menu)
 }
 
-function showFriendRequestNotification(fromUsername) {
-    console.log("Notifikacija: " + fromUsername + " te je dodao!");
+// PRIKAZIVANJE PROZORČIĆA I DUGMIĆA
+let trenutniKojiTrazi = null;
+
+function prikaziZahtevNaEkranu(odKoga) {
+    trenutniKojiTrazi = odKoga; // Pamtimo ko nam je poslao zahtev
+    document.getElementById('requester-name').innerText = odKoga;
+    document.getElementById('friend-request-modal').style.display = 'block';
 }
 
 // Učitaj pending friend requests pri pokretanju
 function checkIncomingFriendRequests() {
     loadPendingRequests();
-    if (pendingRequests.length > 0) {
-        showPendingRequestsUI();
-    }
+    // Logika za prikazivanje starih zahteva je sada u 'multiplayer-menu'
+    // Ova funkcija se može proširiti ako je potrebno
 }
 
 // Kreiraj avatar kao na slici - pixel art stil
@@ -1762,27 +1996,6 @@ function createPlayerAvatar(username) {
     return group;
 }
 
-// Prikazi avatara svih online prijatelja
-function updateFriendAvatars() {
-    // Ukloni stare avatare
-    scene.children.forEach(obj => {
-        if (obj.userData && obj.userData.type === 'friend') {
-            scene.remove(obj);
-        }
-    });
-
-    // Dodaj nove avatare za online prijatelje
-    Object.entries(onlineFriends).forEach(([username, data]) => {
-        if (data.avatar) {
-            data.avatar.position.copy(data.position || new THREE.Vector3(0, 0, 0));
-            if (data.rotation) {
-                data.avatar.rotation.y = data.rotation;
-            }
-            scene.add(data.avatar);
-        }
-    });
-}
-
 // Slanje pozicije svim online prijateljima
 function broadcastPlayerPosition() {
     if (!currentUser || Object.keys(onlineFriends).length === 0) return;
@@ -1794,7 +2007,7 @@ function broadcastPlayerPosition() {
                     type: 'player-move',
                     username: currentUser,
                     position: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
-                    rotation: camera.rotation.y
+                    quaternion: camera.quaternion
                 });
             } catch(e) {
                 console.log("Greška pri slanju pozicije:", e);
@@ -1803,6 +2016,19 @@ function broadcastPlayerPosition() {
     });
 }
 
+// Generička funkcija za slanje podataka svim online prijateljima
+function broadcastData(data) {
+    if (!currentUser) return;
+    Object.values(onlineFriends).forEach(friend => {
+        if (friend && friend.conn && friend.conn.open) {
+            try {
+                friend.conn.send(data);
+            } catch (e) {
+                console.error("Greška pri slanju podataka prijatelju:", e);
+            }
+        }
+    });
+}
 // --- MENIJI, SVETOVI I START IGRE ---
 const screenMain = document.getElementById('screen-main');
 const screenSelect = document.getElementById('screen-select');
@@ -1932,19 +2158,8 @@ document.getElementById('btn-multiplayer').addEventListener('click', (event) => 
     console.log("Add Friend clicked!");
     document.getElementById('multiplayer-menu').style.display = 'flex';
     document.getElementById('overlay').style.display = 'none'; // Sakrij glavni meni
+    if (typeof window.refreshFriendsList === 'function') window.refreshFriendsList();
 });
-
-// Izvezi funkcije u globalni prostor
-window.searchAndAddFriend = function() {
-    const usernameInput = document.getElementById('friend-search-input');
-    const username = usernameInput.value.trim();
-    if (username) {
-        sendFriendRequest(username);
-        usernameInput.value = ''; // Očisti polje nakon slanja
-    } else {
-        alert("Unesite username prijatelja.");
-    }
-};
 
 window.acceptFriendReq = function(username) {
     acceptFriendRequest(username);
@@ -1957,21 +2172,112 @@ window.rejectFriendReq = function(username) {
 // Finalno pokretanje igre (Device izbor)
 document.getElementById('start-desktop').addEventListener('click', () => {
     // Inicijalizuj friend sistem za single player
-    currentUser = localStorage.getItem('hvcraft_user_email') || 'player';
     initFriendSystem();
-    loadFriendsList();
     checkIncomingFriendRequests();
     
     controls.lock();
-    updateHearts(); // Inicijalni prikaz srca
+    updateHearts(); updateInventoryUI(); // Inicijalni prikaz UI
     document.getElementById('overlay').style.display = 'none';
     updateOnlineFriendsList();
 });
 
 document.getElementById('start-mobile').addEventListener('click', () => {
     setupMobileControls();
-    updateHearts(); // Inicijalni prikaz srca
+    updateHearts(); updateInventoryUI(); // Inicijalni prikaz UI
     document.getElementById('overlay').style.display = 'none';
+});
+
+// Osluškujemo kada se stranica potpuno učita
+document.addEventListener('DOMContentLoaded', () => {
+    const myUsername = localStorage.getItem('hvcraft_user_email');
+    if (myUsername) {
+        document.getElementById('current-username-display').innerText = myUsername;
+    }
+
+    // KLIK NA DUGME "PRIHVATI"
+    document.getElementById('btn-accept-friend').addEventListener('click', () => {
+        if (trenutniKojiTrazi) {
+            acceptFriendRequest(trenutniKojiTrazi); // Pozivamo postojeću funkciju
+            document.getElementById('friend-request-modal').style.display = 'none';
+            alert(`Prihvatio si zahtev! ${trenutniKojiTrazi} je sada tvoj prijatelj.`);
+            // Osvežavamo UI u meniju
+            if (typeof window.updateFriendsListUI === 'function') window.updateFriendsListUI();
+        }
+    });
+
+    // KLIK NA DUGME "ODBIJ"
+    document.getElementById('btn-decline-friend').addEventListener('click', () => {
+        if (trenutniKojiTrazi) {
+            rejectFriendRequest(trenutniKojiTrazi); // Pozivamo postojeću funkciju
+            document.getElementById('friend-request-modal').style.display = 'none';
+        }
+    });
+
+    // ========== AUTOCOMPLETE PRETRAGA PRIJATELJA ==========
+    const getAllPlayers = () => {
+        const players = [];
+        // Iteriramo kroz sve ključeve u localStorage
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            // Ako ključ počinje sa prefiksom za šifru, to je igrač
+            if (key.startsWith('hvcraft_pass_')) {
+                // Uklanjamo prefiks da dobijemo čisto korisničko ime
+                players.push(key.replace('hvcraft_pass_', ''));
+            }
+        }
+        return players;
+    };
+
+    const searchInput = document.getElementById('search-player-input');
+    const resultsContainer = document.getElementById('search-results');
+
+    if (searchInput && resultsContainer) {
+        // 'input' event se pokreće svaki put kad ukucaš ili obrišeš slovo
+        searchInput.addEventListener('input', (event) => {
+            const unos = event.target.value.toLowerCase();
+            resultsContainer.innerHTML = ''; 
+
+            if (unos.length === 0) {
+                resultsContainer.style.display = 'none';
+                return;
+            }
+
+            const sviIgraciUBazi = getAllPlayers();
+            // Filtriramo niz - ostavljamo samo one koji POČINJU na ta slova i nisu trenutni korisnik
+            const pronadjeniIgraci = sviIgraciUBazi.filter(igrac => 
+                igrac.toLowerCase().startsWith(unos) && igrac.toLowerCase() !== currentUser.toLowerCase()
+            );
+
+            if (pronadjeniIgraci.length > 0) {
+                resultsContainer.style.display = 'block'; // Prikaži padajuću listu
+                
+                pronadjeniIgraci.forEach(igrac => {
+                    const divIgraca = document.createElement('div');
+                    divIgraca.innerText = igrac;
+                    divIgraca.style.cssText = 'padding: 10px; color: white; cursor: pointer; border-bottom: 1px solid #555;';
+
+                    divIgraca.onmouseover = () => divIgraca.style.background = '#4CAF50';
+                    divIgraca.onmouseout = () => divIgraca.style.background = 'transparent';
+
+                    divIgraca.onclick = () => {
+                        searchInput.value = igrac; // Ime se upisuje gore u polje
+                        resultsContainer.style.display = 'none'; // Lista se zatvara
+                        sendFriendRequest(igrac); // Odmah pozivamo funkciju za slanje zahteva!
+                    };
+                    resultsContainer.appendChild(divIgraca);
+                });
+            } else {
+                resultsContainer.style.display = 'none';
+            }
+        });
+
+        // Opcija: Sakrij listu ako klikneš negde drugde na ekranu
+        document.addEventListener('click', (event) => {
+            if (event.target !== searchInput) {
+                resultsContainer.style.display = 'none';
+            }
+        });
+    }
 });
 
 // =========================================================================
@@ -1988,12 +2294,29 @@ function animate() {
     const deltaTime = Math.min(clock.getDelta(), 0.1);
     blockParticles.update(deltaTime);
 
-    // --- FRIEND POSITION BROADCASTING ---
-    // Šalji poziciju svim online prijateljima
-    broadcastPlayerPosition();
-    
-    // Ažuriraj avatare prijatelja
-    updateFriendAvatars();
+    // --- ITEM PICKUP & MULTIPLAYER BROADCAST ---
+    if (controls.isLocked) {
+        // Šalji poziciju svim online prijateljima (u intervalima radi optimizacije)
+        if (raycastThrottle % 3 === 0) {
+            broadcastPlayerPosition();
+        }
+
+        // Logika za sakupljanje itema
+        if (gameMode === 'survival') {
+            for (let i = droppedItems.length - 1; i >= 0; i--) {
+                const drop = droppedItems[i];
+                drop.mesh.rotation.y += 0.05; // Rotacija
+
+                const distance = camera.position.distanceTo(drop.mesh.position);
+                if (distance < 1.5) { // Domet sakupljanja
+                    if (inventory.hasOwnProperty(drop.type)) inventory[drop.type]++;
+                    updateInventoryUI();
+                    scene.remove(drop.mesh);
+                    droppedItems.splice(i, 1);
+                }
+            }
+        }
+    }
     
     if (isMining && currentMiningTarget) {
         // Provera da li igrač i dalje gleda u isti blok
@@ -2011,7 +2334,8 @@ function animate() {
 
         if (stillOnTarget) {
             // Punimo progress (prilagođeno za deltaTime, ~2 sekunde po bloku)
-            miningProgress += deltaTime * 50; 
+            const miningTime = getSurvivalMiningTime(currentMiningTarget.type);
+            miningProgress += (deltaTime / miningTime) * 100;
             
             // Menjamo fazu pukotina zavisno od progresa
             const stage = Math.min(4, Math.floor(miningProgress / 20));
@@ -2019,11 +2343,24 @@ function animate() {
 
             // Kad stigne do 100, puklo je!
             if (miningProgress >= 100) {
-                // playSound(mineSound);
-                const particleColor = blockColors[currentMiningTarget.type] || 0x737373;
-                blockParticles.spawn(currentMiningTarget.pos, particleColor, 12);
-                modifiedBlocks.set(currentMiningTarget.key, { action: 'delete' });
-                refreshChunksAround(currentMiningTarget.rx, currentMiningTarget.rz);
+                const { key, pos, type, rx, ry, rz } = currentMiningTarget;
+                
+                const particleColor = blockColors[type] || 0x737373;
+                blockParticles.spawn(pos, particleColor, 12);
+
+                // Kreiraj dropovani item koji igrač može da pokupi
+                createItemDrop(pos, type);
+
+                modifiedBlocks.set(key, { action: 'delete' });
+                refreshChunksAround(rx, rz);
+
+                // Obavesti druge igrače o uništenju bloka
+                broadcastData({
+                    type: 'block-action',
+                    action: 'break',
+                    pos: { x: rx, y: ry, z: rz },
+                    blockType: type
+                });
                 
                 isMining = false;
                 crackMesh.visible = false;
@@ -2034,6 +2371,23 @@ function animate() {
             isMining = false;
             crackMesh.visible = false;
         }
+    }
+
+    // Funkcija za kreiranje dropovanog itema
+    createItemDrop = function(position, type) {
+        if (!materials[type] || type === 'water') return;
+
+        const dropGeometry = new THREE.BoxGeometry(0.25, 0.25, 0.25);
+        const dropMesh = new THREE.Mesh(dropGeometry, materials[type]);
+        dropMesh.position.copy(position);
+        
+        const drop = {
+            mesh: dropMesh,
+            type: type,
+        };
+
+        scene.add(dropMesh);
+        droppedItems.push(drop);
     }
 
     if (controls.isLocked) {
@@ -2114,13 +2468,24 @@ function animate() {
             isFalling = false; // U Creative modu nema pada, pa samo resetujemo
         }
 
-        // --- VIZUELNI EFEKAT: Plava magla kada zaroniš glavu ---
-        if (camera.position.y < WATER_LEVEL + 0.2 && getHeight(Math.floor(camera.position.x), Math.floor(camera.position.z)) < WATER_LEVEL) {
-            scene.fog.color.setHex(0x1e90ff); // Plava podvodna boja
-            scene.fog.density = 0.15; // Gusta magla da ne vidiš beskrajno daleko
+        // --- VIZUELNI EFEKAT: Magla u zavisnosti od okoline ---
+        const playerSurfH = getHeight(Math.floor(camera.position.x), Math.floor(camera.position.z));
+        const isUnderground = camera.position.y < playerSurfH - 4 && hasBlockAt(
+            Math.floor(camera.position.x), Math.floor(camera.position.y + 2), Math.floor(camera.position.z));
+
+        if (camera.position.y < WATER_LEVEL + 0.2 && playerSurfH < WATER_LEVEL) {
+            // Pod vodom - plava magla
+            scene.fog.color.setHex(0x1e90ff);
+            scene.fog.density = 0.15;
             scene.background.setHex(0x1e90ff);
+        } else if (isUnderground) {
+            // U pećini - tamna sivo-crna magla
+            scene.fog.color.setHex(0x111111);
+            scene.fog.density = 0.08;
+            scene.background.setHex(0x111111);
         } else {
-            scene.fog.color.setHex(0x87ceeb); // Vraćamo boju neba
+            // Na površini - boja neba
+            scene.fog.color.setHex(0x87ceeb);
             scene.fog.density = 0.03;
             scene.background.setHex(0x87ceeb);
         }
