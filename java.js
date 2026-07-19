@@ -439,6 +439,32 @@ function isTreeBlockAt(bx, by, bz) {
 // 6. SISTEM ČANKOVA & KOPANJE/GRADNJA
 // =========================================================================
 
+/*
+// Primer alternativnog pristupa za generisanje blokova i pećina
+// koristeći 3D šum. Zahteva implementaciju `noise3D` funkcije.
+function getBlockType(x, y, z) {
+    const surfaceHeight = getHeight(x, z); // Koristimo postojeću funkciju
+
+    // Ako smo iznad zemlje, tu je vazduh
+    if (y > surfaceHeight) return 'air'; 
+
+    // Dodajemo 3D NOISE za pećine
+    // Množimo sa malim brojem (npr. 0.05) da pećine budu velike i glatke
+    const caveNoiseValue = noise3D(x * 0.05, y * 0.05, z * 0.05);
+
+    // Ako je vrednost noise-a ispod neke granice (npr. -0.2), "klesemo" pećinu
+    if (caveNoiseValue < -0.2) {
+        return 'air'; 
+    }
+
+    // Ako smo na samoj površini, stavljamo travu
+    if (y === surfaceHeight) return 'grass';
+    
+    // Sve ostalo ispod je kamen
+    return 'stone';
+}
+*/
+
 function hasBlockAt(bx, by, bz) {
     const key = `${bx},${by},${bz}`;
     if (modifiedBlocks.has(key)) {
@@ -1534,16 +1560,27 @@ function initFriendSystem() {
 }
 
 function handleFriendData(data) {
-    if (data.type === 'friend-request') {
-        pendingRequests.push(data.from);
-        console.log("Novi zahtev od:", data.from);
-        showFriendRequestNotification(data.from);
-    } else if (data.type === 'request-accepted') {
+    if (data.type === 'FRIEND_REQUEST') {
+        console.log(`Dobio si zahtev za prijateljstvo od: ${data.username}`);
+        if (!pendingRequests.includes(data.username)) {
+            pendingRequests.push(data.username);
+            savePendingRequests();
+        }
+        // Prikazuje notifikaciju u igri
+        showFriendRequestNotification(data.username);
+        // Ažurira listu u meniju
+        if (typeof window.updatePendingRequestsUI === 'function') {
+            window.updatePendingRequestsUI();
+        }
+    } else if (data.type === 'REQUEST_ACCEPTED') {
         // Prijatelj je prihvatio zahtev
         if (!friendsList[data.username]) {
-            friendsList[data.username] = { status: 'online', peerId: data.peerId };
+            friendsList[data.username] = { status: 'online', peerId: data.from }; // data.from je peerId pošiljaoca
             saveFriendsList();
-            updateFriendsUI();
+            if (typeof window.updateFriendsListUI === 'function') {
+                window.updateFriendsListUI();
+            }
+            alert(`${data.username} je prihvatio tvoj zahtev!`);
         }
     } else if (data.type === 'player-move') {
         // Ažuriranje pozicije prijatelja
@@ -1558,9 +1595,14 @@ function saveFriendsList() {
     localStorage.setItem('hvcraft_friends_' + currentUser, JSON.stringify(friendsList));
 }
 
+function savePendingRequests() {
+    localStorage.setItem('hvcraft_pending_' + currentUser, JSON.stringify(pendingRequests));
+}
+
 function loadFriendsList() {
     const saved = localStorage.getItem('hvcraft_friends_' + currentUser);
-    friendsList = saved ? JSON.parse(saved) : {};
+    // Sigurnosna provera u slučaju da su podaci oštećeni
+    friendsList = (saved && saved !== 'undefined') ? JSON.parse(saved) : {};
 }
 
 // Pronalaženje igrača po username-u (u bazi svih registrovanih korisnika)
@@ -1570,63 +1612,71 @@ function searchPlayer(username) {
 }
 
 function sendFriendRequest(toUsername) {
-    const toUserId = searchPlayer(toUsername);
-    if (!toUserId) {
+    if (!searchPlayer(toUsername)) {
         alert("Korisnik ne postoji!");
         return;
     }
-    
+
     if (toUsername === currentUser) {
         alert("Ne možeš se dodati sam sebi!");
         return;
     }
 
-    if (friendsList[toUsername]) {
+    if (friendsList && friendsList[toUsername]) {
         alert("Već si prijatelj sa ovim korisnikom!");
         return;
     }
 
-    // Primer kako treba da izgleda slanje preko PeerJS
-    // conn.send({
-    //     type: 'friend-request',
-    //     from: currentUser
-    // });
+    const targetPeerId = localStorage.getItem('hvcraft_peerId_' + toUsername);
+    if (!targetPeerId) {
+        alert("Nije moguće poslati zahtev. Korisnik nije online ili ne postoji.");
+        return;
+    }
 
-    // Pošalji zahtev na server (za sada samo čuvamo u localStorage)
-    const requestData = {
-        type: 'friend-request',
-        from: currentUser,
-        timestamp: Date.now()
-    };
+    // Poveži se sa drugim igračem koristeći njegov ID
+    const conn = peer.connect(targetPeerId);
 
-    // Čuva zahtev kao "pending"
-    let pendingReqs = JSON.parse(localStorage.getItem('hvcraft_pending_' + toUsername) || '[]');
-    pendingReqs.push(requestData);
-    localStorage.setItem('hvcraft_pending_' + toUsername, JSON.stringify(pendingReqs));
+    conn.on('open', () => {
+        // Kada se veza otvori, pošalji JSON sa tipom zahteva
+        conn.send({
+            type: 'FRIEND_REQUEST',
+            from: myPeerId, // Tvoj ID
+            username: currentUser
+        });
+        console.log("Zahtev uspesno poslat!");
+        alert("Zahtev poslat!");
+    });
 
-    alert("Zahtev poslat!");
+    conn.on('error', (err) => {
+        console.error("Greška pri konekciji za friend request:", err);
+        alert("Nije moguće poslati zahtev. Korisnik je možda offline.");
+    });
 }
 
 function acceptFriendRequest(fromUsername) {
     if (!friendsList[fromUsername]) {
-        friendsList[fromUsername] = { status: 'offline', peerId: '' };
+        friendsList[fromUsername] = { status: 'offline', peerId: null };
     }
-    friendsList[fromUsername].status = 'pending-accept';
     saveFriendsList();
 
     // Ukloni iz pending
     pendingRequests = pendingRequests.filter(u => u !== fromUsername);
-    updateFriendsUI();
+    savePendingRequests();
+
+    // Ažuriraj UI
+    if (typeof window.updatePendingRequestsUI === 'function') window.updatePendingRequestsUI();
+    if (typeof window.updateFriendsListUI === 'function') window.updateFriendsListUI();
 }
 
 function rejectFriendRequest(fromUsername) {
     pendingRequests = pendingRequests.filter(u => u !== fromUsername);
-    updateFriendsUI();
+    savePendingRequests();
+    if (typeof window.updatePendingRequestsUI === 'function') window.updatePendingRequestsUI();
 }
 
 function loadPendingRequests() {
-    const pending = localStorage.getItem('hvcraft_pending_' + currentUser);
-    pendingRequests = pending ? JSON.parse(pending).map(r => r.from) : [];
+    const saved = localStorage.getItem('hvcraft_pending_' + currentUser);
+    pendingRequests = (saved && saved !== 'undefined') ? JSON.parse(saved) : [];
 }
 
 function updateFriendsUI() {
@@ -1886,9 +1936,13 @@ document.getElementById('btn-multiplayer').addEventListener('click', (event) => 
 
 // Izvezi funkcije u globalni prostor
 window.searchAndAddFriend = function() {
-    const username = prompt("Unesi username prijatelja:");
+    const usernameInput = document.getElementById('friend-search-input');
+    const username = usernameInput.value.trim();
     if (username) {
         sendFriendRequest(username);
+        usernameInput.value = ''; // Očisti polje nakon slanja
+    } else {
+        alert("Unesite username prijatelja.");
     }
 };
 
